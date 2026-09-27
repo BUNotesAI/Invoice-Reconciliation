@@ -1,11 +1,11 @@
 """Strict wire records; untrusted facts remain candidates until confirmed."""
 import re
-from datetime import date
+from datetime import date, datetime
 from typing import Annotated, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr, model_validator
 
-from .values import cents, cn_upper_to_cents, invoice_number, local_date, safe_name, utc_instant
+from .values import cents, cn_upper_to_cents, invoice_number, label_name, local_date, safe_name, utc_instant
 
 Sha256 = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 Identifier = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$")]
@@ -116,17 +116,23 @@ class SourceFile(Record):
 
 
 class ServicePeriod(Record):
-    check_in: str
-    check_out: str
-    nights: Annotated[int, Field(gt=0, le=366)]
+    """Stay dates are facts like any other reading: extracted, candidate or user-confirmed."""
+    check_in: Fact
+    check_out: Fact
+    nights: Fact
 
     @model_validator(mode="after")
     def consistent(self):
-        local_date(self.check_in)
-        local_date(self.check_out)
-        if (date.fromisoformat(self.check_out) - date.fromisoformat(self.check_in)).days != self.nights:
+        local_date(self.check_in.value)
+        local_date(self.check_out.value)
+        if type(self.nights.value) is not int or not 0 < self.nights.value <= 366:
+            raise ValueError("Invalid number of nights")
+        if (date.fromisoformat(self.check_out.value) - date.fromisoformat(self.check_in.value)).days != self.nights.value:
             raise ValueError("Stay duration differs from dates")
         return self
+
+    def facts(self):
+        return [("check_in", self.check_in), ("check_out", self.check_out), ("nights", self.nights)]
 
 
 class Invoice(Record):
@@ -162,14 +168,15 @@ class Invoice(Record):
         if self.order_ref is not None and (not isinstance(self.order_ref.value, str)
                                            or not re.fullmatch(r"[A-Za-z0-9-]{1,64}", self.order_ref.value)):
             raise ValueError("Invalid order reference")
-        for name in INVOICE_FIELDS + ("order_ref",):
-            fact = getattr(self, name)
-            if fact is not None and fact.source.file_sha256 != self.source_file_id:
+        for _, fact in self.facts():
+            if fact.source.file_sha256 != self.source_file_id:
                 raise ValueError("Fact source differs from invoice source")
         return self
 
     def facts(self):
-        return [(name, getattr(self, name)) for name in INVOICE_FIELDS + ("order_ref",) if getattr(self, name) is not None]
+        """Every reading on this invoice, stay dates included, as (name, fact)."""
+        facts = [(name, getattr(self, name)) for name in INVOICE_FIELDS + ("order_ref",) if getattr(self, name) is not None]
+        return facts + (self.service_period.facts() if self.service_period is not None else [])
 
     def trusted(self):
         return all(fact.level != "candidate" for _, fact in self.facts())
@@ -185,6 +192,10 @@ class HistoryEvent(Record):
     def instant(self):
         utc_instant(self.at)
         return self
+
+
+def parse_instant(value):
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
 # Allowed predecessor of each appended history status; voided keeps earlier payment facts.
@@ -213,7 +224,7 @@ class HistoryEntry(Record):
         cents(self.amount_cents)
         if self.replaces_invoice_no is not None:
             invoice_number(self.replaces_invoice_no)
-        if any(a.at > b.at for a, b in zip(self.events, self.events[1:])):
+        if any(parse_instant(a.at) > parse_instant(b.at) for a, b in zip(self.events, self.events[1:])):
             raise ValueError("History events out of order")
         if self.events:
             if self.current_status != self.events[-1].status:
@@ -325,8 +336,8 @@ class PackageItem(Record):
     @model_validator(mode="after")
     def values(self):
         local_date(self.service_date)
-        safe_name(self.category)
-        safe_name(self.short_name)
+        label_name(self.category)
+        label_name(self.short_name)
         if self.replaces_invoice_no is not None:
             invoice_number(self.replaces_invoice_no)
         if len(set(self.decision_ids)) != len(self.decision_ids):

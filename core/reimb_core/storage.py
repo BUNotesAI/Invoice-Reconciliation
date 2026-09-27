@@ -4,6 +4,7 @@ import io
 import os
 import re
 import signal
+import stat
 import tempfile
 import zipfile
 from contextlib import contextmanager
@@ -85,16 +86,48 @@ def parse_deadline():
         signal.signal(signal.SIGALRM, previous)
 
 
-def _image_pixels(page):
-    resources = page.get("/Resources")
+MAX_FORM_DEPTH = 8
+
+
+def _pixels(width, height):
+    require(0 <= int(width) * int(height) <= MAX_PIXELS, "PARSE_LIMIT", "Embedded image pixel limit exceeded")
+
+
+def _inline_images(stream_owner, reader):
+    """Declared size of every inline image (BI ... ID ... EI) in one content stream."""
+    from pypdf.generic import ContentStream
+    content = ContentStream(stream_owner, reader)
+    for operands, operator in content.operations:
+        if operator == b"INLINE IMAGE":
+            settings = operands.get("settings", {})
+            _pixels(settings.get("/W", settings.get("/Width", 0)), settings.get("/H", settings.get("/Height", 0)))
+
+
+def _resource_images(resources, reader, seen, depth):
+    """Image XObjects at any depth of Form XObject nesting, and inline images inside those forms."""
+    require(depth <= MAX_FORM_DEPTH, "PARSE_LIMIT", "PDF form nesting limit exceeded")
     xobjects = resources.get_object().get("/XObject") if resources is not None else None
     if xobjects is None:
         return
     for reference in xobjects.get_object().values():
+        key = getattr(reference, "idnum", None)
+        if key is not None:
+            if key in seen:
+                continue
+            seen.add(key)
         xobject = reference.get_object()
-        if xobject.get("/Subtype") == "/Image":
-            width, height = int(xobject.get("/Width", 0)), int(xobject.get("/Height", 0))
-            require(0 <= width * height <= MAX_PIXELS, "PARSE_LIMIT", "Embedded image pixel limit exceeded")
+        subtype = xobject.get("/Subtype")
+        if subtype == "/Image":
+            _pixels(xobject.get("/Width", 0), xobject.get("/Height", 0))
+        elif subtype == "/Form":
+            _inline_images(xobject, reader)
+            _resource_images(xobject.get("/Resources"), reader, seen, depth + 1)
+
+
+def _image_pixels(page, reader):
+    _resource_images(page.get("/Resources"), reader, set(), 0)
+    if page.get("/Contents") is not None:
+        _inline_images(page.get_contents(), reader)
 
 
 def pdf_pages(data):
@@ -106,10 +139,10 @@ def pdf_pages(data):
             require(0 < len(reader.pages) <= MAX_PAGES, "PARSE_LIMIT", "PDF page limit exceeded")
             texts, total = [], 0
             for page in reader.pages:
-                _image_pixels(page)
                 contents = page.get_contents()
                 require(contents is None or len(contents.get_data()) <= MAX_STREAM,
                         "PARSE_LIMIT", "PDF content limit exceeded")
+                _image_pixels(page, reader)
                 text = page.extract_text() or ""
                 total += len(text)
                 require(total <= 1024 * 1024, "PARSE_LIMIT", "PDF text limit exceeded")
@@ -197,6 +230,21 @@ def detect(data):
     return "unsupported"
 
 
+def read_upload(path):
+    """Read through one descriptor opened without following links; a hard link could import a file from outside."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        raise CoreError("INVALID_PATH", "Input must be a regular file") from None
+    with os.fdopen(fd, "rb") as handle:
+        status = os.fstat(handle.fileno())
+        require(stat.S_ISREG(status.st_mode) and status.st_nlink == 1, "INVALID_PATH", "Input must be a single-link regular file")
+        require(status.st_size <= MAX_FILE, "INPUT_TOO_LARGE", "File size limit exceeded")
+        data = handle.read(MAX_FILE + 1)
+    require(len(data) <= MAX_FILE, "INPUT_TOO_LARGE", "File size limit exceeded")
+    return data
+
+
 class Store:
     def __init__(self, batch_dir, runtime_root):
         self.root = Path(runtime_root).resolve()
@@ -221,11 +269,7 @@ class Store:
         require(isinstance(source_path, str) and isinstance(original_name, str) and len(original_name) <= 255
                 and not re.search(r"[\x00-\x1f\x7f]", original_name), message="Invalid ingest input")
         path = inside(source_path, self.root)
-        require(path.is_file(), "INVALID_PATH", "Input must be a regular file")
-        require(path.stat().st_size <= MAX_FILE, "INPUT_TOO_LARGE", "File size limit exceeded")
-        with path.open("rb") as handle:
-            data = handle.read(MAX_FILE + 1)
-        require(len(data) <= MAX_FILE, "INPUT_TOO_LARGE", "File size limit exceeded")
+        data = read_upload(path)
         key = hashlib.sha256(data).hexdigest()
         target = inside(self.objects / key, self.root, must_exist=False)
         metadata = inside(self.objects / (key + ".json"), self.root, must_exist=False)

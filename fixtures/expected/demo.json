@@ -107,5 +107,5 @@
     "total_cents": 490140,
     "entered_count": 10
   },
-  "verify": {"passed": true, "checks": ["row_completeness", "date_order", "unique_invoices", "table_disk", "filename_fields", "category_totals"]}
+  "verify": {"passed": true, "checks": ["row_completeness", "date_order", "unique_invoices", "table_disk", "filename_fields", "category_totals", "source_facts"]}
 }

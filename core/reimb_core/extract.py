@@ -5,7 +5,8 @@ from datetime import date
 from pydantic import ValidationError
 
 from .errors import CoreError, require
-from .models import INVOICE_FIELDS, Fact, Invoice, PdfPage, ImageRegion, ServicePeriod, Source
+from .models import Fact, Invoice, PdfPage, ImageRegion, ServicePeriod, Source
+from .rules import fact_kind
 from .storage import pdf_pages
 from .values import cn_upper_to_cents, decimal_cents
 
@@ -51,7 +52,8 @@ def text_fields(pages):
     return fields, located
 
 
-def service_period(remark):
+def service_period(remark, make_fact):
+    """Stay dates from the remark, as facts at the same level as the reading they come from."""
     stay = STAY.search(remark)
     if stay is None:
         return None
@@ -60,7 +62,8 @@ def service_period(remark):
         explicit = re.search(r"([0-9]+)\s*晚", remark)
         if explicit and int(explicit[1]) != nights:
             raise conflict("Stay nights differ from dates")
-        return ServicePeriod(check_in=stay[1], check_out=stay[2], nights=nights)
+        return ServicePeriod(check_in=make_fact("check_in", stay[1]), check_out=make_fact("check_out", stay[2]),
+                             nights=make_fact("nights", nights))
     except (ValueError, ValidationError):
         raise conflict("Invalid service period") from None
 
@@ -72,15 +75,16 @@ def build_invoice(source, fields, locate, level, method):
         raise conflict("Invalid uppercase amount") from None
     if upper != fields["amount_cents"]:
         raise conflict("Invoice amount cross-check failed")
+    def make_fact(key, value):
+        return Fact(id=f"{source.id[:16]}.{key}.{level}", value=value, level=level,
+                    source=Source(file_sha256=source.sha256, method=method, locator=locate(key)),
+                    validation_results=["format_checked", "amount_cross_checked"])
     try:
-        facts = {key: Fact(id=f"{source.id[:16]}.{key}.{level}", value=value, level=level,
-                           source=Source(file_sha256=source.sha256, method=method, locator=locate(key)),
-                           validation_results=["format_checked", "amount_cross_checked"])
-                 for key, value in fields.items()}
+        facts = {key: make_fact(key, value) for key, value in fields.items()}
     except ValidationError:
         raise conflict("Invoice field is not valid text") from None
-    # Stay dates come only from deterministic text; a candidate remark cannot set nights.
-    period = service_period(fields["remark"]) if level == "extracted" else None
+    # A vision remark yields candidate stay facts; they need the same user confirmation as every other reading.
+    period = service_period(fields["remark"], make_fact)
     try:
         return Invoice(id="invoice-" + source.id[:16], source_file_id=source.id, service_period=period, **facts)
     except (ValidationError, CoreError):
@@ -90,8 +94,9 @@ def build_invoice(source, fields, locate, level, method):
 
 def parse_text_invoice(source, data):
     fields, located = text_fields(pdf_pages(data))
-    return build_invoice(source, fields, lambda key: PdfPage(type="pdf_page", page=located[key], field=key),
-                         "extracted", "text")
+    # Stay facts are read from the remark, so they share its page.
+    return build_invoice(source, fields, lambda key: PdfPage(type="pdf_page", page=located.get(key, located["remark"]),
+                                                             field=key), "extracted", "text")
 
 
 def extract(store, source_file_id, vision_candidate=None):
@@ -121,12 +126,15 @@ def extract(store, source_file_id, vision_candidate=None):
     issues = []
     if not invoice.trusted():
         issues.append("FACT_UNCONFIRMED")
-    if "住宿" in invoice.project.value and invoice.service_period is None:
+    if fact_kind(invoice) == "lodging" and invoice.service_period is None:
         issues.append("STAY_PERIOD_MISSING")
     return {"invoice": invoice.model_dump(), "issues": issues}
 
 
+def business_values(invoice):
+    """Every reading's value by name, stay dates included."""
+    return {name: fact.value for name, fact in invoice.facts()}
+
+
 def same_business_values(stored, parsed):
-    return all(getattr(stored, name).value == getattr(parsed, name).value for name in INVOICE_FIELDS) and (
-        (stored.order_ref.value if stored.order_ref else None) == (parsed.order_ref.value if parsed.order_ref else None)
-        and stored.service_period == parsed.service_period)
+    return business_values(stored) == business_values(parsed)

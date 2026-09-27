@@ -7,7 +7,7 @@ from pydantic import Field, ValidationError, model_validator
 
 from .errors import CoreError, require
 from .models import Record
-from .values import digest, safe_name
+from .values import digest, label_name, safe_name
 
 Cents = Annotated[int, Field(ge=0, le=2**63 - 1)]
 
@@ -26,6 +26,8 @@ class Limits(Record):
 class Category(Record):
     btype: str
     summary: str
+    # What the invoice facts must show for this category; rules key off facts, not the label.
+    kind: Literal["lodging", "meal", "local_taxi", "air", "other"]
 
 
 class OverLimit(Record):
@@ -73,12 +75,12 @@ class Policy(Record):
     def names(self):
         safe_name(self.company.name)
         for key, category in self.categories.items():
-            safe_name(key)
+            label_name(key)
             safe_name(category.btype)
             safe_name(category.summary)
         for seller, short in self.short_names.items():
             require(0 < len(seller) <= 255, "INVALID_POLICY", "Invalid seller name")
-            safe_name(short)
+            label_name(short)
         return self
 
     def sha(self):

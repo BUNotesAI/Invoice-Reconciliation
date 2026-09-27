@@ -79,6 +79,17 @@ EDGE_INVOICES = [
     # Uppercase and decimal amounts disagree.
     dict(code="E13", no="26442000000700000023", date="2026-10-18", amount="18.00", upper="壹拾玖圆整",
          seller="瑞幸咖啡", project="*餐饮服务*餐饮服务", remark=""),
+    # A second re-issue for the same order as F10: one original may be replaced only once.
+    dict(code="E16", no="26112000000300012802", date="2026-10-29", amount="1460.00", upper="壹仟肆佰陆拾圆整",
+         seller="中国国际航空股份有限公司", project="*运输服务*国内航空旅客运输服务",
+         remark="重开票 航班 CA1502 2026-09-22", order="AIR-ORD-7731"),
+    # Same invoice number as F01 in a different file: two copies of one invoice.
+    dict(code="E17", no="26442000000100010131", date="2026-10-13", amount="30.80", upper="叁拾圆捌角",
+         seller="瑞幸咖啡", project="*餐饮服务*餐饮服务", remark="补打"),
+    # Image-only hotel invoice: stay dates exist only as a vision reading.
+    dict(code="E18", no="26112000000400099991", date="2026-10-09", amount="1560.00", upper="壹仟伍佰陆拾圆整",
+         seller="北京燕园会展酒店有限公司", project="*住宿服务*住宿费", remark="入住 2026-10-06 离店 2026-10-09 3晚",
+         image_only=True),
     # A second unlabelled 20-digit number makes the invoice number ambiguous.
     dict(code="E14", no="26442000000700000024", date="2026-10-18", amount="18.00", upper="壹拾捌圆整",
          seller="瑞幸咖啡", project="*餐饮服务*餐饮服务", remark="参考 26442000000799999999"),

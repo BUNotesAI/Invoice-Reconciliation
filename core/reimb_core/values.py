@@ -156,6 +156,16 @@ def safe_name(value, limit=80):
     return value
 
 
+LABEL = re.compile(r"[\u4e00-\u9fffA-Za-z][\u4e00-\u9fffA-Za-z0-9·（）()]{0,19}")
+
+
+def label_name(value):
+    """Category and short names sit between `_` separators in attachment names: letters only, no trailing digit."""
+    require(isinstance(value, str) and LABEL.fullmatch(value) is not None and not value[-1].isdigit(),
+            "INVALID_PATH", "Unsafe label name")
+    return value
+
+
 def canonical(value):
     def visit(item, depth=0):
         require(depth < 64, message="JSON nesting too deep")

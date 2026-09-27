@@ -1,32 +1,17 @@
 """Build reproducible staging packages from a validated immutable snapshot."""
 import hashlib
-import io
-import re
-import zipfile
 from collections import defaultdict
-from datetime import datetime
-from decimal import Decimal
-
-from openpyxl import Workbook
-from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 from .errors import CoreError, require
 from .extract import parse_text_invoice, same_business_values
 from .history import replacement_candidates, validated_history
+from .ledger import workbook
 from .models import HistoryEntry, Snapshot
+from .rules import check_category, stay_over_limit
 from .storage import atomic_write, inside
 from .values import amount_text, canonical, digest, safe_name, strict_json, sum_cents
 
-HEADERS = ["序号", "报销类型", "项目", "费用明细", "金额", "日期", "发票号", "公司全称", "备注"]
-SUMMARY_HEADERS = ["报销类型", "金额"]
-FIXED_TIME = datetime(2026, 1, 1)
 STAGED_RECORDS = ("manifest.json", "snapshot.json")
-
-
-def spreadsheet_text(value):
-    """Text written by users or agents is neutralised so no spreadsheet treats it as a formula."""
-    value = str(value)
-    return "'" + value if value.startswith(("=", "+", "-", "@")) else value
 
 
 def replacement_note(invoice_no):
@@ -44,74 +29,6 @@ def attachment_name(item):
 
 def ledger_name(policy, applicant, total_cents):
     return safe_name(policy.naming.ledger.replace("{applicant}", applicant).replace("{total}", amount_text(total_cents)), 240)
-
-
-def normalize_xlsx(data):
-    output = io.BytesIO()
-    with zipfile.ZipFile(io.BytesIO(data)) as source, zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target:
-        for name in sorted(source.namelist()):
-            content = source.read(name)
-            if name == "docProps/core.xml":
-                content = re.sub(rb"(<dcterms:(?:created|modified)[^>]*>)[^<]+", rb"\g<1>2026-01-01T00:00:00Z", content)
-            info = zipfile.ZipInfo(name, (2026, 1, 1, 0, 0, 0))
-            info.compress_type = zipfile.ZIP_DEFLATED
-            info.external_attr = 0o600 << 16
-            target.writestr(info, content)
-    return output.getvalue()
-
-
-def workbook(rows, totals, applicant):
-    book = Workbook()
-    summary = book.active
-    summary.title = "汇总"
-    summary.append(SUMMARY_HEADERS)
-    for category, value in sorted(totals.items()):
-        summary.append([spreadsheet_text(category), Decimal(value) / 100])
-    summary.append(["合计", Decimal(sum_cents(totals.values())) / 100])
-    summary["D1"] = "申请人"
-    summary["D2"] = spreadsheet_text(applicant)
-    summary["D4"] = "金额按确认快照生成；修改后须重新终审。"
-    detail = book.create_sheet("明细")
-    detail.append(HEADERS)
-    for index, row in enumerate(rows, 1):
-        values = [index, row["btype"], row["summary"], row["expense_detail"], Decimal(row["amount_cents"]) / 100,
-                  row["service_date"], row["invoice_no"], row["seller_name"], row["relative_name"]]
-        for column, value in enumerate(values, 1):
-            cell = detail.cell(index + 1, column, spreadsheet_text(value) if isinstance(value, str) else value)
-            if isinstance(value, str):
-                cell.data_type = "s"
-            if column == 7:
-                cell.number_format = "@"
-    end = len(rows) + 2
-    detail.cell(end, 1, "合计")
-    detail.merge_cells(start_row=end, start_column=1, end_row=end, end_column=4)
-    detail.cell(end, 5, Decimal(sum_cents(row["amount_cents"] for row in rows)) / 100)
-    border = Border(*(Side(style="thin", color="D3DED9"),) * 4)
-    for sheet in book:
-        sheet.freeze_panes = "A2"
-        for cells in sheet:
-            for cell in cells:
-                cell.font = Font(name="Arial", size=11, bold=cell.row == 1)
-                cell.alignment = Alignment(vertical="center", wrap_text=True)
-                cell.border = border
-                if cell.row == 1:
-                    cell.fill = PatternFill("solid", fgColor="D9EAE2")
-        sheet.row_dimensions[1].height = 26
-    for column, width in {"A": 8, "B": 16, "C": 22, "D": 55, "E": 15, "F": 16, "G": 26, "H": 36, "I": 65}.items():
-        detail.column_dimensions[column].width = width
-    summary.column_dimensions["A"].width = 24
-    summary.column_dimensions["B"].width = 18
-    summary.column_dimensions["D"].width = 58
-    for row in range(2, end + 1):
-        detail.cell(row, 5).number_format = "#,##0.00"
-    for row in range(2, len(totals) + 3):
-        summary.cell(row, 2).number_format = "#,##0.00"
-    book.properties.created = FIXED_TIME
-    book.properties.modified = FIXED_TIME
-    book.properties.creator = "Invoice Reconciliation"
-    stream = io.BytesIO()
-    book.save(stream)
-    return normalize_xlsx(stream.getvalue())
 
 
 def load_history(store, history_hash):
@@ -149,10 +66,18 @@ def check_facts(store, item, decisions):
     return source, path
 
 
-def validate_snapshot(raw, expected, policy, store):
-    require(isinstance(raw, dict) and isinstance(expected, str) and digest(raw) == expected,
-            "SNAPSHOT_MISMATCH", "Snapshot hash mismatch", 3)
+def normalized_snapshot(raw):
+    """The validated snapshot with every optional field spelled out; its hash is the execution key.
+
+    Spelling a default explicitly or leaving it out therefore names the same snapshot and staging directory."""
     snapshot = Snapshot.model_validate(raw)
+    return snapshot, snapshot.model_dump()
+
+
+def validate_snapshot(raw, expected, policy, store):
+    require(isinstance(raw, dict) and isinstance(expected, str), message="Invalid snapshot")
+    snapshot, normalized = normalized_snapshot(raw)
+    require(digest(normalized) == expected, "SNAPSHOT_MISMATCH", "Snapshot hash mismatch", 3)
     require(snapshot.policy_hash == policy.sha(), "SNAPSHOT_MISMATCH", "Policy changed", 3)
     history = load_history(store, snapshot.history_hash)
     decisions = {decision.id: decision for decision in snapshot.decisions}
@@ -170,6 +95,8 @@ def validate_snapshot(raw, expected, policy, store):
                 "DUPLICATE_INVOICE", "Invoice already present", 3)
         seen.add(invoice.invoice_no.value)
         require(item.category in policy.categories, "INVALID_POLICY", "Unknown category")
+        # The facts, not the chosen label, decide which rules apply; the label must agree with them.
+        shown = check_category(invoice, policy.categories[item.category])
         require(invoice.source_file_id not in attachments, "LINK_CONFLICT", "Attachment used by two items", 3)
         attachments.add(invoice.source_file_id)
         sources[item.id] = check_facts(store, item, applicable)
@@ -187,17 +114,19 @@ def validate_snapshot(raw, expected, policy, store):
             replaced.add(previous["invoice_no"])
         else:
             require(item.replaces_invoice_no is None, "HISTORY_UNKNOWN", "Replacement history not found", 3)
-        if item.category == "住宿":
+        if shown == "lodging":
             require(invoice.service_period is not None, "EVIDENCE_MISSING", "Stay duration required", 3)
-            require(item.service_date == invoice.service_period.check_in, "FIELD_CONFLICT", "Stay date differs from check-in", 3)
-            over = invoice.amount_cents.value > invoice.service_period.nights * policy.limits.hotel_per_night_cents
-            require(not over or "explain_over_limit" in kinds, "EVIDENCE_MISSING", "Over-limit explanation required", 3)
+            require(item.service_date == invoice.service_period.check_in.value, "FIELD_CONFLICT",
+                    "Stay date differs from check-in", 3)
+            require(not stay_over_limit(invoice, policy) or "explain_over_limit" in kinds, "EVIDENCE_MISSING",
+                    "Over-limit explanation required", 3)
     sum_cents(item.invoice.amount_cents.value for item in snapshot.items)
     return snapshot, sources
 
 
 def package(store, policy, confirmed_snapshot, expected_snapshot_hash):
     snapshot, sources = validate_snapshot(confirmed_snapshot, expected_snapshot_hash, policy, store)
+    _, normalized = normalized_snapshot(confirmed_snapshot)
     staging = inside(store.batch / "staging" / expected_snapshot_hash, store.root, must_exist=False)
     rows, files, planned = [], [], {}
     totals = defaultdict(int)
@@ -224,7 +153,7 @@ def package(store, policy, confirmed_snapshot, expected_snapshot_hash):
     manifest = dict(schema_version=1, batch_id=snapshot.batch_id, revision=snapshot.revision,
                     snapshot_hash=expected_snapshot_hash, policy_hash=snapshot.policy_hash, history_hash=snapshot.history_hash,
                     ledger_name=ledger, files=files, rows=rows, total_cents=total, category_totals=dict(sorted(totals.items())))
-    planned["snapshot.json"] = canonical(confirmed_snapshot)
+    planned["snapshot.json"] = canonical(normalized)
     planned["manifest.json"] = canonical(manifest)
     # Idempotent: an earlier run of the same snapshot must have produced exactly these bytes.
     if staging.exists():

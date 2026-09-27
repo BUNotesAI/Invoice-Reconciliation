@@ -76,25 +76,35 @@ def runtime(tmp_path):
     return Runtime(tmp_path / "data")
 
 
+def confirmed_fact(fact, value, event_id, actor, at):
+    return {
+        "id": fact["id"].removesuffix(".candidate") + ".confirmed", "value": value, "level": "confirmed",
+        "source": {"file_sha256": fact["source"]["file_sha256"], "method": "user",
+                   "locator": {"type": "user_confirmation", "event_id": event_id, "actor": actor,
+                               "confirmed_at": at, "original_fact_id": fact["id"]}},
+        "validation_results": ["user_checked"], "candidate_id": fact["id"], "confirmed_by": actor,
+        "confirmation_event": event_id, "confirmed_at": at}
+
+
 def confirm(candidate, corrections, event_id, actor=ACTOR, at=AT):
-    """Orchestrator step after the user checked a vision reading: every field becomes a confirmed fact."""
+    """Orchestrator step after the user checked a vision reading: every field, stay dates included, becomes confirmed."""
     invoice = copy.deepcopy(candidate)
     for name, fact in list(invoice.items()):
-        if not isinstance(fact, dict) or fact.get("level") != "candidate":
-            continue
-        value = corrections.get(name, fact["value"])
-        invoice[name] = {
-            "id": fact["id"].removesuffix(".candidate") + ".confirmed", "value": value, "level": "confirmed",
-            "source": {"file_sha256": fact["source"]["file_sha256"], "method": "user",
-                       "locator": {"type": "user_confirmation", "event_id": event_id, "actor": actor,
-                                   "confirmed_at": at, "original_fact_id": fact["id"]}},
-            "validation_results": ["user_checked"], "candidate_id": fact["id"], "confirmed_by": actor,
-            "confirmation_event": event_id, "confirmed_at": at}
+        if isinstance(fact, dict) and fact.get("level") == "candidate":
+            invoice[name] = confirmed_fact(fact, corrections.get(name, fact["value"]), event_id, actor, at)
+    period = invoice.get("service_period")
+    if period:
+        for name, fact in list(period.items()):
+            if fact.get("level") == "candidate":
+                period[name] = confirmed_fact(fact, corrections.get(name, fact["value"]), event_id, actor, at)
     return invoice
 
 
 def confirmed_fact_ids(invoice):
-    return sorted(fact["id"] for fact in invoice.values() if isinstance(fact, dict) and fact.get("level") == "confirmed")
+    facts = [fact for fact in invoice.values() if isinstance(fact, dict) and fact.get("level") == "confirmed"]
+    facts += [fact for fact in (invoice.get("service_period") or {}).values()
+              if isinstance(fact, dict) and fact.get("level") == "confirmed"]
+    return sorted(fact["id"] for fact in facts)
 
 
 def decision(identifier, item_id, kind, payload, revision=5, event=None, actor=ACTOR):

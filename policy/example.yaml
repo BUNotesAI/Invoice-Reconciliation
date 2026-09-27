@@ -13,11 +13,11 @@ limits:
   local_taxi_per_day_cents: 5000
 over_limit: {explain_by: applicant, approve_by: finance}
 categories:
-  餐饮: {btype: 餐饮, summary: 餐饮费}
-  打车: {btype: 差旅费, summary: 差旅-交通费}
-  机票: {btype: 差旅费, summary: 差旅-交通费}
-  住宿: {btype: 差旅费, summary: 差旅-住宿费}
-  电脑: {btype: 办公设备, summary: 办公设备}
+  餐饮: {btype: 餐饮, summary: 餐饮费, kind: meal}
+  打车: {btype: 差旅费, summary: 差旅-交通费, kind: local_taxi}
+  机票: {btype: 差旅费, summary: 差旅-交通费, kind: air}
+  住宿: {btype: 差旅费, summary: 差旅-住宿费, kind: lodging}
+  电脑: {btype: 办公设备, summary: 办公设备, kind: other}
 short_names: {北京滴滴出行科技有限公司: 滴滴, 瑞幸咖啡: 瑞幸}
 naming:
   pdf: "{invoice_no}_{short}_{amount}_{category}.pdf"

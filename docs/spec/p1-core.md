@@ -29,9 +29,14 @@ PYTHONPATH=core REIMB_DATA=<私有数据根> uv run python -m reimb_core <comman
 | `history project` | 输入 `events[]`，每条 `{invoice_no, status, actor, at, note, expense?}`，只有 submitted 带 `expense`；按顺序折叠为条目，得到的条目 `events_complete=true` | 规格只写了「events」，此处补定义 |
 | `gates` 结果 | 增加 `invoice_no`、`history_hash`、`history_issues`、`policy_hash` | 编排器据此构造快照，绑定门禁所用的政策与历史 |
 | `Manifest` | 增加 `ledger_name`；交接清单按政策 `naming.ledger` 命名（示例：`示例科技-费用报销发票交接清单-林一-CNY4901.4.xlsx`） | 设计 §7 命名 |
-| `verify` | 六项检查；读 XLSX 实际单元格与磁盘，从快照独立复算，不调用打包代码；清单、快照、附件任一损坏都判失败（fail closed），不抛出 | 设计 §5.6 |
-| 住宿 | 服务日期 = 入住日；超每晚标准须有 `explain_over_limit` 决定 | F08 |
-| 输入上限 | 20 MB / 20 页 / 40 MP（含 PDF 内嵌图片，按声明尺寸、不解码）/ 解压流 16 MB / XLSX 解包 32 MB、200 项 / 20 秒 / 100 文件 | 设计 §5.8、交接风险 5 |
+| `verify` | 七组检查：设计 §5.6 的六项，加 P1-fix 的 `source_facts`（快照 ↔ 原件与政策）；读 XLSX 实际单元格与磁盘，并按快照独立重建期望工作簿逐字节比对；清单、快照、附件任一损坏都判失败（fail closed），不抛出 | 设计 §5.6、对抗审查 A3/A4 |
+| 住宿与类别 | 规则按发票事实触发（`rules.fact_kind`：项目行先于销售方名称），不按类别标签；政策类别带 `kind`（lodging / meal / local_taxi / air / other），类别须与事实一致，否则 `FIELD_CONFLICT`；住宿票服务日期 = 入住日，超每晚标准须有 `explain_over_limit` | F08、对抗审查 A1 |
+| 住宿日期 | `service_period` 的入住、离店、晚数都是 Fact：文字层 extracted，视觉读数 candidate，确认后 confirmed 并受 `confirm_visual` 的 `fact_ids` 绑定 | 对抗审查 A2 |
+| 快照哈希 | 执行键 = 校验后快照 `model_dump()` 的规范 JSON 哈希；省略或写明可选字段得到同一快照与暂存目录；暂存的 `snapshot.json` 是规范化形式 | 审查员另注 |
+| 标签名 | 类别与简称只允许中英文字母、数字、`·`、括号，首字不能是数字、末字不能是数字，且无 `_`，不能在附件名里伪造金额段 | 对抗审查 A9 |
+| 输入上限 | 20 MB / 20 页 / 40 MP（页面、任意深度 Form XObject 内的图片与内联图片都按声明尺寸查，不解码；Form 嵌套 ≤ 8 层）/ 解压流 16 MB / XLSX 解包 32 MB、200 项 / 20 秒 / 100 文件 | 设计 §5.8、交接风险 5、对抗审查 A8 |
+| 上传读取 | 路径逐级拒绝 symlink；以 `O_NOFOLLOW` 打开，同一 fd 上 `fstat` 要求普通文件且 `st_nlink == 1`，再从该 fd 读取（拒绝硬链接引入根外文件、消除检查与读取之间的窗口） | 对抗审查 A7 |
+| 历史事件顺序 | 按解析后的 UTC 时间比较，不按字符串 | 对抗审查 A6 |
 | ingest 崩溃恢复 | 元数据文件是提交标记：对象已写、元数据未写时重跑会补写元数据 | 交接风险 4 |
 
 ## 测试
@@ -43,7 +48,8 @@ PYTHONPATH=core REIMB_DATA=<私有数据根> uv run python -m reimb_core <comman
 - 打包拒绝：快照哈希不符、篡改 extracted 金额、未确认候选、确认缺决定、重开票缺决定、超标缺说明、畸形决定与快照（8 种）、历史重复票、抬头错误、政策变化、暂存产物被改。
 - 边界集（P1 部分）：已付款原票重开、状态不明原票、视觉读数票号错一位、大小写同时错、19 位票号、大小写不一致、住宿缺晚数、晚数与日期矛盾、双 20 位数字、公式商户名、HTML 商户名、超页、非发票。
 - 加固：超大文件、像素上限（PNG 与 PDF 内嵌图）、解压炸弹（PDF 与 XLSX）、根外路径、`..`、symlink（文件与批次目录）、原始文件名只作展示、重复上传、崩溃恢复、对象被改、100 文件上限、信封与政策校验、错误不回显内容、产物权限 0600。
-- 变异抽查：10 个关键守卫逐一禁用，9 个被测试抓到；剩下 1 个是等价变异（图片分支里的 `trusted()` 已被后面的逐事实 confirmed 检查覆盖）。
+- 守卫反例（P1-fix，`test_guards.py`）：对抗审查 A1–A9 各项与 M01–M20 每个守卫都有一条走真实 CLI 的反例，断言该守卫自己的错误码或 issue 文本；「模拟打包缺陷」夹具绕过 package 直写暂存，终审必须独立判红。
+- 变异：`scripts/mutation_check.py` 列出全部关键守卫（47 个），每个在独立副本上跑全量测试，要求全部被杀；确属等价的写在脚本 `EQUIVALENT` 里并附理由（当前为空）。
 
 ## 待外环裁定
 

@@ -63,6 +63,11 @@ def test_ingest_detects_every_demo_file(demo):
     assert {name: source["detected_type"] for name, source in run["sources"].items()} == DEMO["detected_types"]
 
 
+def stay_values(invoice):
+    period = invoice["service_period"]
+    return None if period is None else {name: fact["value"] for name, fact in period.items()}
+
+
 def test_extract_matches_hand_written_facts(demo):
     _, run = demo
     for code, want in DEMO["invoices"].items():
@@ -73,7 +78,7 @@ def test_extract_matches_hand_written_facts(demo):
         got = {name: invoice[name]["value"] for name in ("invoice_no", "issue_date", "amount_cents", "amount_upper",
                                                          "buyer_name", "buyer_tax_id", "seller_name")}
         got.update(order_ref=invoice["order_ref"]["value"] if invoice["order_ref"] else None,
-                   service_period=invoice["service_period"], issues=run["extract_issues"][code])
+                   service_period=stay_values(invoice), issues=run["extract_issues"][code])
         assert got == want, code
         assert all(invoice[name]["level"] == "extracted" and invoice[name]["source"]["locator"]["type"] == "pdf_page"
                    for name in ("invoice_no", "amount_cents", "buyer_tax_id"))
@@ -137,7 +142,7 @@ def test_workbook_cells_read_back(demo):
         ["报销类型", "金额"], ["差旅-交通费", 2897.1], ["差旅-住宿费", 1560], ["餐饮费", 444.3], ["合计", 4901.4]]
 
 
-def test_verify_passes_all_six_checks(demo):
+def test_verify_passes_every_check(demo):
     _, run = demo
     assert run["verify"]["passed"] is DEMO["verify"]["passed"]
     assert [check["name"] for check in run["verify"]["checks"] if check["passed"]] == DEMO["verify"]["checks"]
