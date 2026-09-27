@@ -1,0 +1,23 @@
+# Local agent configuration (public repository)
+.claude/
+CLAUDE.md
+CLAUDE.local.md
+.playwright-mcp/
+
+# OS and editor
+.DS_Store
+.idea/
+.vscode/
+
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+
+# Build outputs
+target/
+node_modules/
+dist/
+__pycache__/
+*.pyc
+.venv/
