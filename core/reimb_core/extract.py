@@ -1,78 +1,132 @@
 """Conservative text-layer extraction. Ambiguous fields never silently win."""
 import re
 from datetime import date
+
 from pydantic import ValidationError
 
 from .errors import CoreError, require
-from .models import Fact, Invoice, Source, ServicePeriod
-from .storage import pdf_text
-from .values import decimal_cents, cn_upper_to_cents
+from .models import INVOICE_FIELDS, Fact, Invoice, PdfPage, ImageRegion, ServicePeriod, Source
+from .storage import pdf_pages
+from .values import cn_upper_to_cents, decimal_cents
 
 LABELS = {
     "invoice_no": "发票号码", "issue_date": "开票日期", "amount_cents": "价税合计小写",
     "amount_upper": "价税合计大写", "buyer_name": "购买方名称", "buyer_tax_id": "购买方税号",
     "seller_name": "销售方名称", "project": "项目", "remark": "备注", "order_ref": "订单号",
 }
+OPTIONAL = {"order_ref", "remark", "buyer_tax_id"}
+STAY = re.compile(r"入住\s*([0-9]{4}-[0-9]{2}-[0-9]{2})\s*离店\s*([0-9]{4}-[0-9]{2}-[0-9]{2})")
 
 
-def text_fields(text):
-    fields = {}
-    for key, label in LABELS.items():
-        matches = re.findall(r"(?:^|\n)\s*" + label + r"\s*[:：]\s*([^\n]*)", text)
-        require(len(matches) <= 1, "FIELD_CONFLICT", "Multiple values for invoice field", 3)
-        if matches:
-            fields[key] = matches[0].strip()
-    for name in set(LABELS) - {"order_ref", "remark"}:
-        require(name in fields and bool(fields[name]), "FIELD_CONFLICT", "Missing invoice field", 3)
-    fields.setdefault("remark", "")
-    candidates = set(re.findall(r"(?<![0-9])[0-9]{20}(?![0-9])", text))
-    require(fields["invoice_no"] in candidates, "FIELD_CONFLICT", "Invoice number cross-check failed", 3)
-    # A second unrelated 20-digit value is ambiguous until a parser can identify its role.
-    allowed = {fields["invoice_no"], fields.get("order_ref")}
-    require(candidates <= allowed, "FIELD_CONFLICT", "Ambiguous invoice number", 3)
-    fields["amount_cents"] = decimal_cents(fields["amount_cents"].removeprefix("¥").removeprefix("￥"))
-    return fields
+def conflict(message):
+    return CoreError("FIELD_CONFLICT", message, 3)
+
+
+def text_fields(pages):
+    """Labelled values and the 1-based page each came from."""
+    fields, located = {}, {}
+    for number, text in enumerate(pages, 1):
+        for key, label in LABELS.items():
+            for match in re.finditer(r"(?:^|\n)[ \t]*" + label + r"[ \t]*[:：][ \t]*([^\n]*)", text):
+                if key in fields:
+                    raise conflict("Multiple values for invoice field")
+                fields[key], located[key] = match[1].strip(), number
+    for name in set(LABELS) - OPTIONAL:
+        if not fields.get(name):
+            raise conflict("Missing invoice field")
+    for name in OPTIONAL - {"order_ref"}:
+        fields.setdefault(name, "")
+        located.setdefault(name, located["invoice_no"])
+    if "order_ref" in fields and not fields["order_ref"]:
+        del fields["order_ref"], located["order_ref"]
+    # Dual channel: the labelled number must be the only 20-digit value that is not the order reference.
+    candidates = set(re.findall(r"(?<![0-9])[0-9]{20}(?![0-9])", "\n".join(pages)))
+    if fields["invoice_no"] not in candidates or not candidates <= {fields["invoice_no"], fields.get("order_ref")}:
+        raise conflict("Invoice number cross-check failed")
+    amount = fields["amount_cents"].removeprefix("¥").removeprefix("￥").strip()
+    try:
+        fields["amount_cents"] = decimal_cents(amount)
+    except CoreError:
+        raise conflict("Invalid decimal amount") from None
+    return fields, located
+
+
+def service_period(remark):
+    stay = STAY.search(remark)
+    if stay is None:
+        return None
+    try:
+        nights = (date.fromisoformat(stay[2]) - date.fromisoformat(stay[1])).days
+        explicit = re.search(r"([0-9]+)\s*晚", remark)
+        if explicit and int(explicit[1]) != nights:
+            raise conflict("Stay nights differ from dates")
+        return ServicePeriod(check_in=stay[1], check_out=stay[2], nights=nights)
+    except (ValueError, ValidationError):
+        raise conflict("Invalid service period") from None
+
+
+def build_invoice(source, fields, locate, level, method):
+    try:
+        upper = cn_upper_to_cents(fields["amount_upper"])
+    except CoreError:
+        raise conflict("Invalid uppercase amount") from None
+    if upper != fields["amount_cents"]:
+        raise conflict("Invoice amount cross-check failed")
+    try:
+        facts = {key: Fact(id=f"{source.id[:16]}.{key}.{level}", value=value, level=level,
+                           source=Source(file_sha256=source.sha256, method=method, locator=locate(key)),
+                           validation_results=["format_checked", "amount_cross_checked"])
+                 for key, value in fields.items()}
+    except ValidationError:
+        raise conflict("Invoice field is not valid text") from None
+    # Stay dates come only from deterministic text; a candidate remark cannot set nights.
+    period = service_period(fields["remark"]) if level == "extracted" else None
+    try:
+        return Invoice(id="invoice-" + source.id[:16], source_file_id=source.id, service_period=period, **facts)
+    except (ValidationError, CoreError):
+        # A document reading that fails format checks goes to review, it is not a malformed request.
+        raise conflict("Invoice fields failed validation") from None
+
+
+def parse_text_invoice(source, data):
+    fields, located = text_fields(pdf_pages(data))
+    return build_invoice(source, fields, lambda key: PdfPage(type="pdf_page", page=located[key], field=key),
+                         "extracted", "text")
 
 
 def extract(store, source_file_id, vision_candidate=None):
     source, path = store.source(source_file_id)
     if source.detected_type == "invoice_pdf":
-        fields = text_fields(pdf_text(path.read_bytes()))
-        level, method = "extracted", "text"
-    elif source.detected_type in ("image_invoice", "image"):
+        invoice = parse_text_invoice(source, path.read_bytes())
+    elif source.detected_type in ("image_invoice_pdf", "image"):
         if vision_candidate is None:
             return {"invoice": None, "issues": ["VISION_REQUIRED"]}
-        require(isinstance(vision_candidate, dict) and
-                set(LABELS) - {"order_ref", "remark"} <= set(vision_candidate) <= set(LABELS),
+        require(isinstance(vision_candidate, dict)
+                and set(LABELS) - OPTIONAL <= set(vision_candidate) <= set(LABELS)
+                and all(type(value) is str for value in vision_candidate.values()),
                 message="Invalid vision candidate fields")
-        fields = dict(vision_candidate)
-        fields.setdefault("remark", "")
-        level, method = "candidate", "vision"
+        fields = {key: value.strip() for key, value in vision_candidate.items()}
+        for name in OPTIONAL - {"order_ref"}:
+            fields.setdefault(name, "")
+        if not fields.get("order_ref"):
+            fields.pop("order_ref", None)
+        try:
+            fields["amount_cents"] = decimal_cents(fields["amount_cents"].removeprefix("¥").removeprefix("￥"))
+        except CoreError:
+            raise conflict("Invalid decimal amount") from None
+        invoice = build_invoice(source, fields, lambda key: ImageRegion(type="image_region", field=key),
+                                "candidate", "vision")
     else:
         raise CoreError("UNSUPPORTED_FILE", "Source is not a supported invoice")
-    require(cn_upper_to_cents(fields["amount_upper"]) == fields["amount_cents"],
-            "FIELD_CONFLICT", "Invoice amount cross-check failed", 3)
-    facts = {}
-    for key, value in fields.items():
-        facts[key] = Fact(id=f"{source.id}:{key}:{level}", value=value, level=level,
-                          source=Source(file_sha256=source.sha256, method=method, locator=f"field:{LABELS[key]}"),
-                          validation_results=["format_checked", "amount_cross_checked"])
-    issues = ["FACT_UNCONFIRMED"] if level == "candidate" else []
-    period = None
-    remark = fields["remark"]
-    stay = re.search(r"入住\s*([0-9]{4}-[0-9]{2}-[0-9]{2}).*?离店\s*([0-9]{4}-[0-9]{2}-[0-9]{2})", remark)
-    if stay and level != "candidate":
-        try:
-            nights = (date.fromisoformat(stay[2]) - date.fromisoformat(stay[1])).days
-            explicit = re.search(r"([0-9]+)晚", remark)
-            require(not explicit or int(explicit[1]) == nights, "FIELD_CONFLICT", "Stay nights differ from dates", 3)
-            period = ServicePeriod(check_in=stay[1], check_out=stay[2], nights=nights)
-        except (ValueError, ValidationError):
-            raise CoreError("FIELD_CONFLICT", "Invalid service period", 3) from None
-    if "住宿" in fields["project"] and period is None:
+    issues = []
+    if not invoice.trusted():
+        issues.append("FACT_UNCONFIRMED")
+    if "住宿" in invoice.project.value and invoice.service_period is None:
         issues.append("STAY_PERIOD_MISSING")
-    try:
-        invoice = Invoice(id="invoice-" + source.id, source_file_id=source.id, service_period=period, **facts)
-    except ValidationError:
-        raise CoreError("FIELD_CONFLICT", "Invoice fields failed validation", 3) from None
     return {"invoice": invoice.model_dump(), "issues": issues}
+
+
+def same_business_values(stored, parsed):
+    return all(getattr(stored, name).value == getattr(parsed, name).value for name in INVOICE_FIELDS) and (
+        (stored.order_ref.value if stored.order_ref else None) == (parsed.order_ref.value if parsed.order_ref else None)
+        and stored.service_period == parsed.service_period)

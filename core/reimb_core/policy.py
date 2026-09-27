@@ -1,21 +1,26 @@
 """Validated policies are hashed by semantics, not YAML layout."""
-from pydantic import Field, ValidationError, model_validator
+import re
 from typing import Annotated, Literal
+
 import yaml
-from .models import Record
-from .values import safe_name, digest
+from pydantic import Field, ValidationError, model_validator
+
 from .errors import CoreError, require
+from .models import Record
+from .values import digest, safe_name
+
+Cents = Annotated[int, Field(ge=0, le=2**63 - 1)]
 
 
 class Company(Record):
     name: str
-    tax_id: Annotated[str, Field(pattern=r"^[A-Z0-9]{18}$")]
+    tax_id: Annotated[str, Field(pattern=r"^[0-9A-Z]{18}$")]
 
 
 class Limits(Record):
-    hotel_per_night_cents: Annotated[int, Field(ge=0, le=2**63-1)]
-    meal_per_day_cents: Annotated[int, Field(ge=0, le=2**63-1)]
-    local_taxi_per_day_cents: Annotated[int, Field(ge=0, le=2**63-1)]
+    hotel_per_night_cents: Cents
+    meal_per_day_cents: Cents
+    local_taxi_per_day_cents: Cents
 
 
 class Category(Record):
@@ -31,32 +36,49 @@ class OverLimit(Record):
 class Naming(Record):
     pdf: Literal["{invoice_no}_{short}_{amount}_{category}.pdf"]
     package_dir: Literal["{date}{applicant}报销"]
+    ledger: str
+
+    @model_validator(mode="after")
+    def ledger_template(self):
+        fields = re.findall(r"\{([^{}]*)\}", self.ledger)
+        literal = re.sub(r"\{(applicant|total)\}", "", self.ledger)
+        require(set(fields) <= {"applicant", "total"} and "{" not in literal and "}" not in literal
+                and self.ledger.endswith(".xlsx"), "INVALID_POLICY", "Invalid ledger naming template")
+        safe_name(literal, 120)
+        return self
+
+
+class MissingInvoice(Record):
+    deadline: Literal["next_month_end"]
+    remind: list[Annotated[str, Field(pattern=r"^(on_detect|weekly_(mon|tue|wed|thu|fri|sat|sun)_[0-2][0-9]:[0-5][0-9]|deadline_minus_[1-9][0-9]?d)$")]]
 
 
 class Policy(Record):
     company: Company
     timezone: Literal["Asia/Shanghai"]
-    finance: list[Annotated[str, Field(pattern=r"^@[^: ]+:[^ ]+$")]]
+    finance: Annotated[list[Annotated[str, Field(pattern=r"^@[^: ]+:[^ ]+$")]], Field(min_length=1)]
     cycle: Literal["monthly"]
-    remind_at: str
+    remind_at: Annotated[str, Field(pattern=r"^last_day [0-2][0-9]:[0-5][0-9]$")]
     limits: Limits
     over_limit: OverLimit
-    categories: dict[str, Category]
+    categories: Annotated[dict[str, Category], Field(min_length=1)]
     short_names: dict[str, str]
     naming: Naming
-    evidence_window_days: Annotated[int, Field(ge=0, le=366)] = 7
-    ignored_merchants: list[str] = Field(default_factory=list)
+    evidence_window_days: Annotated[int, Field(ge=0, le=366)]
+    late_invoice: Literal["next_batch"]
+    missing_invoice: MissingInvoice
+    ignore_merchants: list[Annotated[str, Field(min_length=1, max_length=255)]]
 
     @model_validator(mode="after")
     def names(self):
         safe_name(self.company.name)
-        require(bool(self.categories) and bool(self.finance), "INVALID_POLICY", "Empty policy rules")
         for key, category in self.categories.items():
             safe_name(key)
             safe_name(category.btype)
             safe_name(category.summary)
-        for value in self.short_names.values():
-            safe_name(value)
+        for seller, short in self.short_names.items():
+            require(0 < len(seller) <= 255, "INVALID_POLICY", "Invalid seller name")
+            safe_name(short)
         return self
 
     def sha(self):
@@ -82,10 +104,12 @@ UniqueLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, uni
 def load_policy(path):
     require(path.stat().st_size <= 65536, "INVALID_POLICY", "Policy too large")
     try:
+        text = path.read_text(encoding="utf-8")
         # No aliases: prevents recursive structures and expansion bombs.
-        text = path.read_text()
-        require(not any(isinstance(t, (yaml.tokens.AliasToken, yaml.tokens.AnchorToken))
-                        for t in yaml.scan(text)), "INVALID_POLICY", "Policy aliases are not supported")
+        require(not any(isinstance(token, (yaml.tokens.AliasToken, yaml.tokens.AnchorToken)) for token in yaml.scan(text)),
+                "INVALID_POLICY", "Policy aliases are not supported")
         return Policy.model_validate(yaml.load(text, Loader=UniqueLoader))
-    except (yaml.YAMLError, ValidationError, ValueError, RecursionError, TypeError):
+    except CoreError as error:
+        raise CoreError("INVALID_POLICY", error.message) from None
+    except (yaml.YAMLError, ValidationError, ValueError, RecursionError, TypeError, UnicodeError):
         raise CoreError("INVALID_POLICY", "Invalid policy") from None

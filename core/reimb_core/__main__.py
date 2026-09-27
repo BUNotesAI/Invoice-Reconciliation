@@ -8,7 +8,7 @@ from pydantic import ValidationError
 from .errors import CoreError, require
 from .extract import extract
 from .gates import gates
-from .history import validated_history
+from .history import project, validated_history
 from .package import package
 from .policy import load_policy
 from .storage import Store, atomic_write, inside
@@ -53,14 +53,13 @@ def dispatch(envelope, command):
     if command == "extract":
         return extract(store, **payload)
     if command == "gates":
-        require(isinstance(payload["invoices"], list) and len(payload["invoices"]) <= 100, message="Invalid invoices")
         return gates(policy=policy, **payload)
     if command == "history":
         require(payload["action"] in ("validate_import", "project"), message="Invalid history action")
         key = "entries" if payload["action"] == "validate_import" else "events"
         require(set(payload) == {"action", key}, message="Invalid history command fields")
-        # project consumes complete HistoryEntry event streams, not anonymous events.
-        result = validated_history(payload[key])
+        # validate_import checks imported entries; project folds a complete appended event log.
+        result = validated_history(payload[key]) if key == "entries" else project(payload[key])
         target = inside(store.batch / "history" / (result["history_hash"] + ".json"), store.root, must_exist=False)
         atomic_write(target, canonical(result["validated_snapshot"]))
         return result

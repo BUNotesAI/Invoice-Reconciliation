@@ -1,7 +1,9 @@
+# Fictional example policy. All company data is invented.
 company:
   name: 示例科技有限公司
   tax_id: 91440300XXXXXXXX0A
 timezone: Asia/Shanghai
+# Matrix accounts carry the reimb- prefix so the setup scripts only touch project resources.
 finance: ["@reimb-zhoumin:reimb.local"]
 cycle: monthly
 remind_at: "last_day 09:00"
@@ -20,5 +22,10 @@ short_names: {北京滴滴出行科技有限公司: 滴滴, 瑞幸咖啡: 瑞幸
 naming:
   pdf: "{invoice_no}_{short}_{amount}_{category}.pdf"
   package_dir: "{date}{applicant}报销"
-evidence_window_days: 7
-ignored_merchants: []
+  ledger: "示例科技-费用报销发票交接清单-{applicant}-CNY{total}.xlsx"
+evidence_window_days: 45
+late_invoice: next_batch
+missing_invoice:
+  deadline: next_month_end
+  remind: [on_detect, weekly_mon_09:00, deadline_minus_3d]
+ignore_merchants: []

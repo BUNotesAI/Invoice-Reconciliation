@@ -1,6 +1,25 @@
-# 本机启动与 P0 验证
+# 本机启动与验证
 
-当前实现是 P0 连接探路：独立 Palpo、测试账号、Rust Matrix bot、静态连接页、octos 文字/图像探测。业务报销流程、授权配对与打包尚未实现，不能用于真实报销。
+当前实现：P0 连接探路（独立 Palpo、测试账号、Rust Matrix bot、静态连接页、octos 文字/图像探测）与 P1 确定性核心（收件、读票、门禁、历史、打包、终审）。关联、Agent、授权配对与聊天流程尚未实现，不能用于真实报销。
+
+## P1 确定性核心
+
+Python 3.12，依赖由 `uv.lock` 锁定：
+
+```sh
+uv sync
+uv run pytest core/                        # 全部测试，经真实 CLI 子进程
+uv run python fixtures/generate.py         # 重新生成虚构样例（字节固定，测试会比对已提交版本）
+uv run python scripts/check_public.py      # 公开仓库扫描
+```
+
+单独调用核心：stdin 送一份 JSON 信封，数据根由环境变量给出，所有路径须在数据根之内：
+
+```sh
+PYTHONPATH=core REIMB_DATA=/absolute/private/root uv run python -m reimb_core ingest < request.json
+```
+
+信封、命令与错误码见 `docs/spec/README.md`，P1 的细化见 `docs/spec/p1-core.md`。样例生成依赖 macOS 上 pdfium 对 STSong-Light 的字体替换来渲染 F09 与 F06 截图；其他平台生成的图片字节可能不同。
 
 ## 版本与前提
 
@@ -69,7 +88,7 @@ python3 -m py_compile scripts/*.py
 python3 scripts/check_public.py
 ```
 
-check_public 只对本机已知测试凭据和私钥标记做内容扫描，不等于完整隐私审计；公开提交仍须人工检查差异，确认都是虚构数据。
+check_public 扫描本机已知测试凭据、私钥标记，以及税号、手机号、邮箱、20 位票号模式（虚构税号须含 `XXXXXXXX`；邮箱只放行 `.example`、`.invalid`、`reimb.local`；票号只允许出现在 `fixtures/` 与 `tests/`）。PDF 与 XLSX 按文字层与单元格扫描，图片不扫描。它不等于完整隐私审计；公开提交仍须人工检查差异，确认都是虚构数据。
 
 接口来源：官方 SDK Client 文档 https://matrix-org.github.io/matrix-rust-sdk/matrix_sdk/struct.Client.html 。本项目实际编译以 lockfile 固定源码为准。
 

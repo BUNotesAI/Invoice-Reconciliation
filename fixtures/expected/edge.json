@@ -1,0 +1,54 @@
+{
+  "_note": "手写边界标准答案（设计 §10.2 中属于 P1 的门禁、历史、加固项）。关联、退款、争用、手标日期冲突属于 P2。",
+  "ingest": {
+    "notes.txt": {"ok": true, "detected_type": "unsupported"},
+    "pages21.pdf": {"ok": false, "code": "PARSE_LIMIT", "exit": 2},
+    "E03.pdf": {"ok": true, "detected_type": "image_invoice_pdf"}
+  },
+  "extract": {
+    "E05.pdf": {"ok": true, "issues": ["STAY_PERIOD_MISSING"], "service_period": null},
+    "E13.pdf": {"ok": false, "code": "FIELD_CONFLICT", "exit": 3},
+    "E14.pdf": {"ok": false, "code": "FIELD_CONFLICT", "exit": 3},
+    "E15.pdf": {"ok": false, "code": "FIELD_CONFLICT", "exit": 3},
+    "E07.pdf": {"ok": true, "seller_name": "=HYPERLINK(\"http://attacker.example\")"},
+    "E08.pdf": {"ok": true, "seller_name": "<b>示例</b>&商行"}
+  },
+  "vision": {
+    "E03.pdf": {
+      "_why": "视觉读数票号错一位、大小写金额同时错但自洽：格式校验通过，只能是 candidate；用户改正后成为 confirmed。",
+      "candidate": {"invoice_no": "26442000000700000073", "issue_date": "2026-10-16", "amount_cents": "129.00", "amount_upper": "壹佰贰拾玖圆整",
+                    "buyer_name": "示例科技有限公司", "buyer_tax_id": "91440300XXXXXXXX0A", "seller_name": "深圳潮海居酒楼有限公司",
+                    "project": "*餐饮服务*餐费", "remark": ""},
+      "candidate_issues": ["FACT_UNCONFIRMED"],
+      "corrected": {"invoice_no": "26442000000700000013", "amount_cents": 12800, "amount_upper": "壹佰贰拾捌圆整"},
+      "bad_candidate": {"invoice_no": "2644200000070000001", "_why": "19 位票号", "code": "FIELD_CONFLICT", "exit": 3},
+      "mismatched_candidate": {"amount_cents": "128.00", "amount_upper": "壹佰贰拾玖圆整", "code": "FIELD_CONFLICT", "exit": 3}
+    }
+  },
+  "history": {
+    "entries": 16,
+    "issues": [{"invoice_no": "26112000000700008802", "reason": "HISTORY_UNKNOWN"}]
+  },
+  "gates": {
+    "E01.pdf": {"disposition": "needs_decision", "review_reasons": ["HISTORY_ALREADY_PAID"], "replacements": ["26112000000700008801"]},
+    "E02.pdf": {"disposition": "needs_decision", "review_reasons": ["HISTORY_UNKNOWN"], "replacements": ["26112000000700008802"]},
+    "E07.pdf": {"disposition": "accepted", "review_reasons": [], "replacements": []},
+    "E08.pdf": {"disposition": "accepted", "review_reasons": [], "replacements": []}
+  },
+  "package": {
+    "E01.pdf": {"service_date": "2026-09-12", "category": "机票", "short_name": "国航", "replaces_invoice_no": "26112000000700008801",
+                "decision": {"kind": "replace_unpaid_invoice", "payload": {"invoice_no": "26112000000700008801"}},
+                "code": "HISTORY_ALREADY_PAID", "exit": 3},
+    "E05.pdf": {"service_date": "2026-10-18", "category": "住宿", "short_name": "燕园会展酒店", "code": "EVIDENCE_MISSING", "exit": 3},
+    "accepted_batch": {
+      "items": {
+        "E03.pdf": {"service_date": "2026-10-16", "category": "餐饮", "short_name": "潮海居"},
+        "E07.pdf": {"service_date": "2026-10-18", "category": "餐饮", "short_name": "公式商户"},
+        "E08.pdf": {"service_date": "2026-10-18", "category": "餐饮", "short_name": "标记商户"}
+      },
+      "seller_cells": {"E07.pdf": "'=HYPERLINK(\"http://attacker.example\")", "E08.pdf": "<b>示例</b>&商行"},
+      "total_cents": 15500,
+      "verify_passed": true
+    }
+  }
+}

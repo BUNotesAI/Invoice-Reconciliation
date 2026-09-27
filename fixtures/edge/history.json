@@ -1,0 +1,512 @@
+[
+  {
+    "amount_cents": 3160,
+    "batch_id": "batch-202609-linyi",
+    "current_status": "paid",
+    "events": [
+      {
+        "actor": "@reimb-linyi:reimb.local",
+        "at": "2026-10-01T02:00:00Z",
+        "note": "九月批次提交",
+        "status": "submitted"
+      },
+      {
+        "actor": "@reimb-zhoumin:reimb.local",
+        "at": "2026-10-02T03:00:00Z",
+        "note": "审批通过",
+        "status": "approved"
+      },
+      {
+        "actor": "@reimb-zhoumin:reimb.local",
+        "at": "2026-10-08T06:00:00Z",
+        "note": "已付款",
+        "status": "paid"
+      }
+    ],
+    "events_complete": true,
+    "initial_paid": false,
+    "invoice_no": "26112000000200009301",
+    "order_ref": null,
+    "replaces_invoice_no": null,
+    "revision": 3,
+    "seller_name": "北京滴滴出行科技有限公司",
+    "service_date": "2026-09-28"
+  },
+  {
+    "amount_cents": 146000,
+    "batch_id": "batch-202609-linyi",
+    "current_status": "voided",
+    "events": [
+      {
+        "actor": "@reimb-linyi:reimb.local",
+        "at": "2026-10-01T02:00:00Z",
+        "note": "九月批次提交",
+        "status": "submitted"
+      },
+      {
+        "actor": "@reimb-zhoumin:reimb.local",
+        "at": "2026-10-02T03:00:00Z",
+        "note": "审批通过",
+        "status": "approved"
+      },
+      {
+        "actor": "@reimb-zhoumin:reimb.local",
+        "at": "2026-10-09T07:00:00Z",
+        "note": "财务作废，待重开票",
+        "status": "voided"
+      }
+    ],
+    "events_complete": true,
+    "initial_paid": false,
+    "invoice_no": "26112000000300002208",
+    "order_ref": "AIR-ORD-7731",
+    "replaces_invoice_no": null,
+    "revision": 3,
+    "seller_name": "中国国际航空股份有限公司",
+    "service_date": "2026-09-22"
+  },
+  {
+    "amount_cents": 2980,
+    "batch_id": "batch-202609-linyi",
+    "current_status": "paid",
+    "events": [
+      {
+        "actor": "@reimb-linyi:reimb.local",
+        "at": "2026-10-01T02:00:00Z",
+        "note": "九月批次提交",
+        "status": "submitted"
+      },
+      {
+        "actor": "@reimb-zhoumin:reimb.local",
+        "at": "2026-10-02T03:00:00Z",
+        "note": "审批通过",
+        "status": "approved"
+      },
+      {
+        "actor": "@reimb-zhoumin:reimb.local",
+        "at": "2026-10-08T06:00:00Z",
+        "note": "已付款",
+        "status": "paid"
+      }
+    ],
+    "events_complete": true,
+    "initial_paid": false,
+    "invoice_no": "26442000000100009102",
+    "order_ref": null,
+    "replaces_invoice_no": null,
+    "revision": 3,
+    "seller_name": "瑞幸咖啡",
+    "service_date": "2026-09-02"
+  },
+  {
+    "amount_cents": 3150,
+    "batch_id": "batch-202609-linyi",
+    "current_status": "paid",
+    "events": [
+      {
+        "actor": "@reimb-linyi:reimb.local",
+        "at": "2026-10-01T02:00:00Z",
+        "note": "九月批次提交",
+        "status": "submitted"
+      },
+      {
+        "actor": "@reimb-zhoumin:reimb.local",
+        "at": "2026-10-02T03:00:00Z",
+        "note": "审批通过",
+        "status": "approved"
+      },
+      {
+        "actor": "@reimb-zhoumin:reimb.local",
+        "at": "2026-10-08T06:00:00Z",
+        "note": "已付款",
+        "status": "paid"
+      }
+    ],
+    "events_complete": true,
+    "initial_paid": false,
+    "invoice_no": "26442000000100009105",
+    "order_ref": null,
+    "replaces_invoice_no": null,
+    "revision": 3,
+    "seller_name": "瑞幸咖啡",
+    "service_date": "2026-09-05"
+  },
+  {
+    "amount_cents": 4220,
+    "batch_id": "batch-202609-linyi",
+    "current_status": "paid",
+    "events": [
+      {
+        "actor": "@reimb-linyi:reimb.local",
+        "at": "2026-10-01T02:00:00Z",
+        "note": "九月批次提交",
+        "status": "submitted"
+      },
+      {
+        "actor": "@reimb-zhoumin:reimb.local",
+        "at": "2026-10-02T03:00:00Z",
+        "note": "审批通过",
+        "status": "approved"
+      },
+      {
+        "actor": "@reimb-zhoumin:reimb.local",
+        "at": "2026-10-08T06:00:00Z",
+        "note": "已付款",
+        "status": "paid"
+      }
+    ],
+    "events_complete": true,
+    "initial_paid": false,
+    "invoice_no": "26112000000200009106",
+    "order_ref": null,
+    "replaces_invoice_no": null,
+    "revision": 3,
+    "seller_name": "北京滴滴出行科技有限公司",
+    "service_date": "2026-09-06"
+  },
+  {
+    "amount_cents": 3570,
+    "batch_id": "batch-202609-linyi",
+    "current_status": "paid",
+    "events": [
+      {
+        "actor": "@reimb-linyi:reimb.local",
+        "at": "2026-10-01T02:00:00Z",
+        "note": "九月批次提交",
+        "status": "submitted"
+      },
+      {
+        "actor": "@reimb-zhoumin:reimb.local",
+        "at": "2026-10-02T03:00:00Z",
+        "note": "审批通过",
+        "status": "approved"
+      },
+      {
+        "actor": "@reimb-zhoumin:reimb.local",
+        "at": "2026-10-08T06:00:00Z",
+        "note": "已付款",
+        "status": "paid"
+      }
+    ],
+    "events_complete": true,
+    "initial_paid": false,
+    "invoice_no": "26112000000200009109",
+    "order_ref": null,
+    "replaces_invoice_no": null,
+    "revision": 3,
+    "seller_name": "北京滴滴出行科技有限公司",
+    "service_date": "2026-09-09"
+  },
+  {
+    "amount_cents": 2890,
+    "batch_id": "batch-202609-linyi",
+    "current_status": "paid",
+    "events": [
+      {
+        "actor": "@reimb-linyi:reimb.local",
+        "at": "2026-10-01T02:00:00Z",
+        "note": "九月批次提交",
+        "status": "submitted"
+      },
+      {
+        "actor": "@reimb-zhoumin:reimb.local",
+        "at": "2026-10-02T03:00:00Z",
+        "note": "审批通过",
+        "status": "approved"
+      },
+      {
+        "actor": "@reimb-zhoumin:reimb.local",
+        "at": "2026-10-08T06:00:00Z",
+        "note": "已付款",
+        "status": "paid"
+      }
+    ],
+    "events_complete": true,
+    "initial_paid": false,
+    "invoice_no": "26112000000200009114",
+    "order_ref": null,
+    "replaces_invoice_no": null,
+    "revision": 3,
+    "seller_name": "北京滴滴出行科技有限公司",
+    "service_date": "2026-09-14"
+  },
+  {
+    "amount_cents": 21800,
+    "batch_id": "batch-202609-linyi",
+    "current_status": "paid",
+    "events": [
+      {
+        "actor": "@reimb-linyi:reimb.local",
+        "at": "2026-10-01T02:00:00Z",
+        "note": "九月批次提交",
+        "status": "submitted"
+      },
+      {
+        "actor": "@reimb-zhoumin:reimb.local",
+        "at": "2026-10-02T03:00:00Z",
+        "note": "审批通过",
+        "status": "approved"
+      },
+      {
+        "actor": "@reimb-zhoumin:reimb.local",
+        "at": "2026-10-08T06:00:00Z",
+        "note": "已付款",
+        "status": "paid"
+      }
+    ],
+    "events_complete": true,
+    "initial_paid": false,
+    "invoice_no": "26442000000500009116",
+    "order_ref": null,
+    "replaces_invoice_no": null,
+    "revision": 3,
+    "seller_name": "深圳潮海居酒楼有限公司",
+    "service_date": "2026-09-16"
+  },
+  {
+    "amount_cents": 96000,
+    "batch_id": "batch-202609-linyi",
+    "current_status": "paid",
+    "events": [
+      {
+        "actor": "@reimb-linyi:reimb.local",
+        "at": "2026-10-01T02:00:00Z",
+        "note": "九月批次提交",
+        "status": "submitted"
+      },
+      {
+        "actor": "@reimb-zhoumin:reimb.local",
+        "at": "2026-10-02T03:00:00Z",
+        "note": "审批通过",
+        "status": "approved"
+      },
+      {
+        "actor": "@reimb-zhoumin:reimb.local",
+        "at": "2026-10-08T06:00:00Z",
+        "note": "已付款",
+        "status": "paid"
+      }
+    ],
+    "events_complete": true,
+    "initial_paid": false,
+    "invoice_no": "26112000000400009117",
+    "order_ref": null,
+    "replaces_invoice_no": null,
+    "revision": 3,
+    "seller_name": "北京燕园会展酒店有限公司",
+    "service_date": "2026-09-17"
+  },
+  {
+    "amount_cents": 2750,
+    "batch_id": "batch-202609-linyi",
+    "current_status": "paid",
+    "events": [
+      {
+        "actor": "@reimb-linyi:reimb.local",
+        "at": "2026-10-01T02:00:00Z",
+        "note": "九月批次提交",
+        "status": "submitted"
+      },
+      {
+        "actor": "@reimb-zhoumin:reimb.local",
+        "at": "2026-10-02T03:00:00Z",
+        "note": "审批通过",
+        "status": "approved"
+      },
+      {
+        "actor": "@reimb-zhoumin:reimb.local",
+        "at": "2026-10-08T06:00:00Z",
+        "note": "已付款",
+        "status": "paid"
+      }
+    ],
+    "events_complete": true,
+    "initial_paid": false,
+    "invoice_no": "26442000000100009119",
+    "order_ref": null,
+    "replaces_invoice_no": null,
+    "revision": 3,
+    "seller_name": "瑞幸咖啡",
+    "service_date": "2026-09-19"
+  },
+  {
+    "amount_cents": 5010,
+    "batch_id": "batch-202609-linyi",
+    "current_status": "paid",
+    "events": [
+      {
+        "actor": "@reimb-linyi:reimb.local",
+        "at": "2026-10-01T02:00:00Z",
+        "note": "九月批次提交",
+        "status": "submitted"
+      },
+      {
+        "actor": "@reimb-zhoumin:reimb.local",
+        "at": "2026-10-02T03:00:00Z",
+        "note": "审批通过",
+        "status": "approved"
+      },
+      {
+        "actor": "@reimb-zhoumin:reimb.local",
+        "at": "2026-10-08T06:00:00Z",
+        "note": "已付款",
+        "status": "paid"
+      }
+    ],
+    "events_complete": true,
+    "initial_paid": false,
+    "invoice_no": "26112000000200009121",
+    "order_ref": null,
+    "replaces_invoice_no": null,
+    "revision": 3,
+    "seller_name": "北京滴滴出行科技有限公司",
+    "service_date": "2026-09-21"
+  },
+  {
+    "amount_cents": 118000,
+    "batch_id": "batch-202609-linyi",
+    "current_status": "paid",
+    "events": [
+      {
+        "actor": "@reimb-linyi:reimb.local",
+        "at": "2026-10-01T02:00:00Z",
+        "note": "九月批次提交",
+        "status": "submitted"
+      },
+      {
+        "actor": "@reimb-zhoumin:reimb.local",
+        "at": "2026-10-02T03:00:00Z",
+        "note": "审批通过",
+        "status": "approved"
+      },
+      {
+        "actor": "@reimb-zhoumin:reimb.local",
+        "at": "2026-10-08T06:00:00Z",
+        "note": "已付款",
+        "status": "paid"
+      }
+    ],
+    "events_complete": true,
+    "initial_paid": false,
+    "invoice_no": "26112000000300009123",
+    "order_ref": "AIR-ORD-7702",
+    "replaces_invoice_no": null,
+    "revision": 3,
+    "seller_name": "中国国际航空股份有限公司",
+    "service_date": "2026-09-23"
+  },
+  {
+    "amount_cents": 3080,
+    "batch_id": "batch-202609-linyi",
+    "current_status": "approved",
+    "events": [
+      {
+        "actor": "@reimb-linyi:reimb.local",
+        "at": "2026-10-01T02:00:00Z",
+        "note": "九月批次提交",
+        "status": "submitted"
+      },
+      {
+        "actor": "@reimb-zhoumin:reimb.local",
+        "at": "2026-10-02T03:00:00Z",
+        "note": "审批通过",
+        "status": "approved"
+      }
+    ],
+    "events_complete": true,
+    "initial_paid": false,
+    "invoice_no": "26442000000100009125",
+    "order_ref": null,
+    "replaces_invoice_no": null,
+    "revision": 3,
+    "seller_name": "瑞幸咖啡",
+    "service_date": "2026-09-25"
+  },
+  {
+    "amount_cents": 3620,
+    "batch_id": "batch-202609-linyi",
+    "current_status": "approved",
+    "events": [
+      {
+        "actor": "@reimb-linyi:reimb.local",
+        "at": "2026-10-01T02:00:00Z",
+        "note": "九月批次提交",
+        "status": "submitted"
+      },
+      {
+        "actor": "@reimb-zhoumin:reimb.local",
+        "at": "2026-10-02T03:00:00Z",
+        "note": "审批通过",
+        "status": "approved"
+      }
+    ],
+    "events_complete": true,
+    "initial_paid": false,
+    "invoice_no": "26112000000200009127",
+    "order_ref": null,
+    "replaces_invoice_no": null,
+    "revision": 3,
+    "seller_name": "北京滴滴出行科技有限公司",
+    "service_date": "2026-09-27"
+  },
+  {
+    "amount_cents": 98000,
+    "batch_id": "batch-202609-linyi",
+    "current_status": "voided",
+    "events": [
+      {
+        "actor": "@reimb-linyi:reimb.local",
+        "at": "2026-10-01T02:00:00Z",
+        "note": "九月批次提交",
+        "status": "submitted"
+      },
+      {
+        "actor": "@reimb-zhoumin:reimb.local",
+        "at": "2026-10-02T03:00:00Z",
+        "note": "审批通过",
+        "status": "approved"
+      },
+      {
+        "actor": "@reimb-zhoumin:reimb.local",
+        "at": "2026-10-08T06:00:00Z",
+        "note": "已付款",
+        "status": "paid"
+      },
+      {
+        "actor": "@reimb-zhoumin:reimb.local",
+        "at": "2026-10-09T07:00:00Z",
+        "note": "财务作废，待重开票",
+        "status": "voided"
+      }
+    ],
+    "events_complete": true,
+    "initial_paid": false,
+    "invoice_no": "26112000000700008801",
+    "order_ref": "AIR-ORD-8801",
+    "replaces_invoice_no": null,
+    "revision": 3,
+    "seller_name": "中国国际航空股份有限公司",
+    "service_date": "2026-09-12"
+  },
+  {
+    "amount_cents": 76000,
+    "batch_id": "batch-202609-linyi",
+    "current_status": "voided",
+    "events": [
+      {
+        "actor": "@reimb-zhoumin:reimb.local",
+        "at": "2026-10-09T07:00:00Z",
+        "note": "财务作废，待重开票",
+        "status": "voided"
+      }
+    ],
+    "events_complete": false,
+    "initial_paid": null,
+    "invoice_no": "26112000000700008802",
+    "order_ref": "AIR-ORD-8802",
+    "replaces_invoice_no": null,
+    "revision": 3,
+    "seller_name": "中国国际航空股份有限公司",
+    "service_date": "2026-09-13"
+  }
+]
