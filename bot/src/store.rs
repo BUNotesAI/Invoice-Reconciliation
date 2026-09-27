@@ -99,6 +99,9 @@ pub struct DeskSession {
     pub paired_until: Option<i64>,
 }
 
+/// Wrong attempts a live pairing code survives (design §9.3).
+pub const CODE_ATTEMPTS: i64 = 5;
+
 pub fn sha256_hex(data: &[u8]) -> String {
     hex::encode(Sha256::digest(data))
 }
@@ -136,12 +139,39 @@ impl Store {
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
         connection.execute_batch(SCHEMA)?;
-        // Databases created before the column existed gain it here.
-        let has_code: bool = connection
-            .prepare("SELECT 1 FROM pragma_table_info('desk_sessions') WHERE name = 'code'")?
+        // Databases created before a column existed gain it here.
+        for (table, column, definition) in [
+            ("desk_sessions", "code", "TEXT"),
+            (
+                "desk_sessions",
+                "code_failures",
+                "INTEGER NOT NULL DEFAULT 0",
+            ),
+            ("desk_sessions", "created", "INTEGER NOT NULL DEFAULT 0"),
+            ("decisions", "superseded_revision", "INTEGER"),
+        ] {
+            let present: bool = connection
+                .prepare(&format!(
+                    "SELECT 1 FROM pragma_table_info('{table}') WHERE name = ?1"
+                ))?
+                .exists([column])?;
+            if !present {
+                connection.execute(
+                    &format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"),
+                    [],
+                )?;
+            }
+        }
+        // A live code names exactly one session. Older databases may hold duplicates: their codes are withdrawn and
+        // the pages draw new ones on the next poll.
+        let indexed: bool = connection
+            .prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'desk_sessions_live_code'")?
             .exists([])?;
-        if !has_code {
-            connection.execute("ALTER TABLE desk_sessions ADD COLUMN code TEXT", [])?;
+        if !indexed {
+            connection.execute_batch(
+                "UPDATE desk_sessions SET code = NULL, code_hash = NULL, code_expires_at = NULL;
+                 CREATE UNIQUE INDEX desk_sessions_live_code ON desk_sessions(code_hash) WHERE code_hash IS NOT NULL;",
+            )?;
         }
         Ok(Self { connection })
     }
@@ -182,10 +212,11 @@ impl Store {
             .collect()
     }
 
+    /// Decisions still in force; superseded ones stay in the table for the record.
     pub fn decisions(&self, batch: &str) -> rusqlite::Result<Vec<Value>> {
         let mut statement = self
             .connection
-            .prepare("SELECT body FROM decisions WHERE batch_id = ?1 ORDER BY seq")?;
+            .prepare("SELECT body FROM decisions WHERE batch_id = ?1 AND superseded_revision IS NULL ORDER BY seq")?;
         statement
             .query_map([batch], |row| row.get::<_, String>(0))?
             .map(|r| r.map(|text| parse(&text)))
@@ -284,6 +315,7 @@ impl Store {
             .optional()
     }
 
+    /// The session holding a live code; the unique index guarantees there is at most one.
     pub fn session_by_code(
         &self,
         code_hash: &str,
@@ -297,6 +329,24 @@ impl Store {
                 row_session,
             )
             .optional()
+    }
+
+    pub fn pairing_audit(&self, batch: &str) -> rusqlite::Result<Vec<(String, String)>> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT sender, result FROM pairing_audit WHERE batch_id = ?1 ORDER BY seq")?;
+        statement
+            .query_map([batch], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect()
+    }
+
+    /// Unpaired sessions of a batch opened since `since`; bounds how many live codes one batch can hold.
+    pub fn unpaired_sessions_since(&self, batch: &str, since: i64) -> rusqlite::Result<i64> {
+        self.connection.query_row(
+            "SELECT COUNT(*) FROM desk_sessions WHERE batch_id = ?1 AND paired_user IS NULL AND created > ?2",
+            params![batch, since],
+            |row| row.get(0),
+        )
     }
 
     pub fn failures_since(&self, sender: &str, since: i64) -> rusqlite::Result<i64> {
@@ -423,22 +473,111 @@ impl Work<'_> {
         )? == 1)
     }
 
-    pub fn put_session(&self, session: &DeskSession) -> rusqlite::Result<()> {
+    /// A new browser session: no code and no pairing yet.
+    pub fn create_session(
+        &self,
+        id_hash: &str,
+        csrf: &str,
+        batch: &str,
+        now: i64,
+    ) -> rusqlite::Result<()> {
         self.tx.execute(
-            "INSERT INTO desk_sessions (id_hash, csrf, batch_id, code, code_hash, code_expires_at, paired_user, paired_until)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-             ON CONFLICT(id_hash) DO UPDATE SET code = excluded.code, code_hash = excluded.code_hash,
-               code_expires_at = excluded.code_expires_at, paired_user = excluded.paired_user, paired_until = excluded.paired_until",
-            params![
-                session.id_hash,
-                session.csrf,
-                session.batch_id,
-                session.code,
-                session.code_hash,
-                session.code_expires_at,
-                session.paired_user,
-                session.paired_until
-            ],
+            "INSERT INTO desk_sessions (id_hash, csrf, batch_id, created) VALUES (?1, ?2, ?3, ?4)",
+            params![id_hash, csrf, batch, now],
+        )?;
+        Ok(())
+    }
+
+    /// Gives a session a new code. False when another live session holds the same code; the caller draws again.
+    pub fn issue_code(
+        &self,
+        session: &str,
+        code: &str,
+        code_hash: &str,
+        expires_at: i64,
+        now: i64,
+    ) -> rusqlite::Result<bool> {
+        self.tx.execute(
+            "UPDATE desk_sessions SET code = NULL, code_hash = NULL, code_expires_at = NULL, code_failures = 0
+             WHERE code_expires_at <= ?1",
+            [now],
+        )?;
+        match self.tx.execute(
+            "UPDATE desk_sessions SET code = ?2, code_hash = ?3, code_expires_at = ?4, code_failures = 0
+             WHERE id_hash = ?1 AND paired_user IS NULL",
+            params![session, code, code_hash, expires_at],
+        ) {
+            Ok(_) => Ok(true),
+            Err(rusqlite::Error::SqliteFailure(error, _))
+                if error.code == rusqlite::ErrorCode::ConstraintViolation =>
+            {
+                Ok(false)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Consumes a live code once: binds its session to `user` and withdraws the code. False if it was already gone.
+    pub fn claim_code(
+        &self,
+        session: &str,
+        code_hash: &str,
+        user: &str,
+        until: i64,
+        now: i64,
+    ) -> rusqlite::Result<bool> {
+        Ok(self.tx.execute(
+            "UPDATE desk_sessions SET paired_user = ?3, paired_until = ?4, code = NULL, code_hash = NULL,
+               code_expires_at = NULL, code_failures = 0
+             WHERE id_hash = ?1 AND code_hash = ?2 AND code_expires_at > ?5 AND paired_user IS NULL",
+            params![session, code_hash, user, until, now],
+        )? == 1)
+    }
+
+    /// A wrong code could have been aimed at any live code, so each one spends one of its five attempts;
+    /// a code with none left is withdrawn and its page draws a new one.
+    pub fn spend_code_attempt(&self, now: i64) -> rusqlite::Result<()> {
+        self.tx.execute(
+            "UPDATE desk_sessions SET code_failures = code_failures + 1 WHERE code_hash IS NOT NULL AND code_expires_at > ?1",
+            [now],
+        )?;
+        self.tx.execute(
+            "UPDATE desk_sessions SET code = NULL, code_hash = NULL, code_expires_at = NULL, code_failures = 0
+             WHERE code_failures >= ?1",
+            [CODE_ATTEMPTS],
+        )?;
+        Ok(())
+    }
+
+    pub fn audit_pairing(
+        &self,
+        batch: &str,
+        session: &str,
+        sender: &str,
+        result: &str,
+        at: i64,
+    ) -> rusqlite::Result<()> {
+        self.tx.execute(
+            "INSERT INTO pairing_audit (batch_id, session, sender, result, at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![batch, &session[..session.len().min(12)], sender, result, at],
+        )?;
+        Ok(())
+    }
+
+    /// Drops unpaired sessions older than their cookie; their codes go with them.
+    pub fn drop_stale_sessions(&self, before: i64) -> rusqlite::Result<()> {
+        self.tx.execute(
+            "DELETE FROM desk_sessions WHERE paired_user IS NULL AND created < ?1",
+            [before],
+        )?;
+        Ok(())
+    }
+
+    /// Takes every decision of a batch out of force, e.g. when collection reopens and the batch is read again.
+    pub fn supersede_decisions(&self, batch: &str, revision: i64) -> rusqlite::Result<()> {
+        self.tx.execute(
+            "UPDATE decisions SET superseded_revision = ?2 WHERE batch_id = ?1 AND superseded_revision IS NULL",
+            params![batch, revision],
         )?;
         Ok(())
     }
@@ -506,7 +645,7 @@ CREATE TABLE IF NOT EXISTS files (
   original_name TEXT NOT NULL, UNIQUE (batch_id, source_id));
 CREATE TABLE IF NOT EXISTS decisions (
   seq INTEGER PRIMARY KEY AUTOINCREMENT, batch_id TEXT NOT NULL REFERENCES batches(id), id TEXT NOT NULL, body TEXT NOT NULL,
-  UNIQUE (batch_id, id));
+  superseded_revision INTEGER, UNIQUE (batch_id, id));
 CREATE TABLE IF NOT EXISTS documents (
   batch_id TEXT NOT NULL REFERENCES batches(id), kind TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY (batch_id, kind));
 CREATE TABLE IF NOT EXISTS outbox (
@@ -515,7 +654,11 @@ CREATE TABLE IF NOT EXISTS outbox (
 CREATE TABLE IF NOT EXISTS inbound (event_id TEXT PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS desk_sessions (
   id_hash TEXT PRIMARY KEY, csrf TEXT NOT NULL, batch_id TEXT NOT NULL, code_hash TEXT, code_expires_at INTEGER,
-  paired_user TEXT, paired_until INTEGER);
+  paired_user TEXT, paired_until INTEGER, code TEXT, code_failures INTEGER NOT NULL DEFAULT 0,
+  created INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS pairing_failures (sender TEXT NOT NULL, at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS pairing_audit (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT, batch_id TEXT NOT NULL, session TEXT NOT NULL, sender TEXT NOT NULL,
+  result TEXT NOT NULL, at INTEGER NOT NULL);
 ";

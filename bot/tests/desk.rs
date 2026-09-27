@@ -3,7 +3,10 @@ mod common;
 
 use std::sync::{Arc, atomic::Ordering};
 
-use common::{Harness, INTRUDER, LINYI, ROOM, ZHOUMIN, item_id, texts, to_needs_decision};
+use common::{
+    Harness, INTRUDER, LINYI, ROOM, SECOND, SECOND_ROOM, ZHOUMIN, item_id, repo, texts,
+    to_needs_decision,
+};
 use matrix_sdk::reqwest::{self, StatusCode};
 use reimb_bot::{
     desk::{DeskConfig, router},
@@ -141,16 +144,33 @@ impl Browser {
 }
 
 async fn paired(desk: &Desk, user: &str, event: &str) -> Browser {
+    paired_to(desk, &desk.batch, user, event).await
+}
+
+async fn paired_to(desk: &Desk, batch: &str, user: &str, event: &str) -> Browser {
     let mut browser = Browser::new(&desk.origin);
-    assert_eq!(browser.open(&desk.batch).await, StatusCode::OK);
-    let (_, state) = browser.state(&desk.batch).await;
+    assert_eq!(browser.open(batch).await, StatusCode::OK);
+    let (_, state) = browser.state(batch).await;
     let code = state["code"].as_str().unwrap().to_string();
     desk.service
         .receive_text(user, ROOM, event, &code)
         .await
         .unwrap();
-    browser.state(&desk.batch).await;
+    browser.state(batch).await;
     browser
+}
+
+impl Browser {
+    async fn code(&mut self, batch: &str) -> String {
+        self.state(batch).await.1["code"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    async fn status(&self, path: &str) -> StatusCode {
+        self.get(path).await.0
+    }
 }
 
 #[tokio::test]
@@ -367,12 +387,9 @@ async fn writes_need_origin_csrf_revision_and_the_applicant() {
 async fn finance_views_but_cannot_change_and_strangers_see_nothing() {
     let desk = desk().await;
     let finance = paired(&desk, ZHOUMIN, "$fin").await;
-    let (status, state) = Browser {
-        cookie: finance.cookie.clone(),
-        ..Browser::new(&desk.origin)
-    }
-    .get(&format!("/desk/api/b/{}/state", desk.batch))
-    .await;
+    let (status, state) = finance
+        .get(&format!("/desk/api/b/{}/state", desk.batch))
+        .await;
     assert_eq!(
         (status, state["role"].clone()),
         (StatusCode::OK, json!("viewer"))
@@ -383,50 +400,131 @@ async fn finance_views_but_cannot_change_and_strangers_see_nothing() {
         finance.post(&desk.batch, "decide", body).await.0,
         StatusCode::FORBIDDEN
     );
+    // Finance may download the batch's sources.
+    let files = desk
+        .service
+        .with_store(|store| store.files(&desk.batch))
+        .unwrap();
+    let source = format!("/desk/api/b/{}/source/{}", desk.batch, files[0].0);
+    assert_eq!(finance.status(&source).await, StatusCode::OK);
+    // A stranger's code is refused, their page stays unpaired and opens nothing.
+    let mut stranger = Browser::new(&desk.origin);
+    stranger.open(&desk.batch).await;
+    let code = stranger.code(&desk.batch).await;
+    desk.service
+        .receive_text(INTRUDER, "!intruder:reimb.local", "$x", &code)
+        .await
+        .unwrap();
+    let (status, state) = stranger.state(&desk.batch).await;
+    assert_eq!(
+        (status, state["paired"].clone()),
+        (StatusCode::OK, json!(false))
+    );
+    assert!(state.get("report").is_none() && state.get("batch").is_none());
+    assert_eq!(stranger.status(&source).await, StatusCode::UNAUTHORIZED);
+    assert!(
+        texts(&desk.service, "-")
+            .iter()
+            .any(|t| t.contains("不属于你"))
+    );
+    // A pairing whose user is no longer allowed on the batch is refused on every read.
+    let mut reading = desk
+        .service
+        .with_store(|store| store.document(&desk.batch, "reading"))
+        .unwrap()
+        .unwrap();
+    reading["finance"] = json!([]);
+    desk.service
+        .with_store(|store| {
+            let work = store.begin()?;
+            work.put_document(&desk.batch, "reading", &reading)?;
+            work.commit()
+        })
+        .unwrap();
+    assert_eq!(
+        finance
+            .status(&format!("/desk/api/b/{}/state", desk.batch))
+            .await,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(finance.status(&source).await, StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]
 async fn sessions_and_downloads_stay_inside_their_batch() {
     let desk = desk().await;
     let browser = paired(&desk, LINYI, "$pair").await;
-    // A session for this batch opens nothing of another batch.
-    let other = format!("b{}", "0".repeat(16));
+    // A second, real batch of another applicant, with its own paired session.
+    let file = std::fs::read(repo().join("fixtures/demo/F01.pdf")).unwrap();
+    desk.service
+        .receive_file(SECOND, SECOND_ROOM, "$second-f01", "F01.pdf", &file)
+        .await
+        .unwrap();
+    let second = desk
+        .service
+        .with_store(|store| store.open_batch_for(SECOND))
+        .unwrap()
+        .unwrap()
+        .id;
+    let other = paired_to(&desk, &second, SECOND, "$pair-second").await;
     assert_eq!(
-        browser.get(&format!("/desk/api/b/{other}/state")).await.0,
-        StatusCode::FORBIDDEN
+        other.status(&format!("/desk/api/b/{second}/state")).await,
+        StatusCode::OK
     );
-    // Sources are addressed by registered object id only.
-    let files = desk
+    let mine = desk
         .service
         .with_store(|store| store.files(&desk.batch))
         .unwrap();
-    let (known, _) = &files[0];
+    let theirs = desk
+        .service
+        .with_store(|store| store.files(&second))
+        .unwrap();
+    // Each session opens nothing of the other batch: state, sources (even an id registered there), files.
+    for (browser, batch, source) in [
+        (&browser, second.as_str(), &theirs[0].0),
+        (&other, desk.batch.as_str(), &mine[0].0),
+    ] {
+        assert_eq!(
+            browser.status(&format!("/desk/api/b/{batch}/state")).await,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            browser
+                .status(&format!("/desk/api/b/{batch}/source/{source}"))
+                .await,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            browser
+                .status(&format!("/desk/api/b/{batch}/files/x.pdf"))
+                .await,
+            StatusCode::FORBIDDEN
+        );
+    }
+    // Inside its own batch a session reaches only ids registered to that batch.
     assert_eq!(
         browser
-            .http
-            .get(format!(
-                "{}/desk/api/b/{}/source/{known}",
-                desk.origin, desk.batch
+            .status(&format!(
+                "/desk/api/b/{}/source/{}",
+                desk.batch, theirs[0].0
             ))
-            .header("cookie", browser.cookie.clone().unwrap())
-            .send()
-            .await
-            .unwrap()
-            .status(),
+            .await,
+        if mine.iter().any(|(id, _)| *id == theirs[0].0) {
+            StatusCode::OK
+        } else {
+            StatusCode::NOT_FOUND
+        }
+    );
+    assert_eq!(
+        browser
+            .status(&format!("/desk/api/b/{}/source/{}", desk.batch, mine[0].0))
+            .await,
         StatusCode::OK
     );
     for probe in ["0".repeat(64), "..%2Fstate.sqlite".into(), "%2E%2E".into()] {
         let status = browser
-            .http
-            .get(format!(
-                "{}/desk/api/b/{}/source/{probe}",
-                desk.origin, desk.batch
-            ))
-            .header("cookie", browser.cookie.clone().unwrap())
-            .send()
-            .await
-            .unwrap()
-            .status();
+            .status(&format!("/desk/api/b/{}/source/{probe}", desk.batch))
+            .await;
         assert!(
             status == StatusCode::NOT_FOUND || status == StatusCode::BAD_REQUEST,
             "{probe}: {status}"
@@ -434,10 +532,179 @@ async fn sessions_and_downloads_stay_inside_their_batch() {
     }
     assert_eq!(
         browser
-            .get(&format!("/desk/api/b/{}/files/state.sqlite", desk.batch))
-            .await
-            .0,
+            .status(&format!("/desk/api/b/{}/files/state.sqlite", desk.batch))
+            .await,
         StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn live_codes_are_unique_and_consumed_once() {
+    let desk = desk().await;
+    let mut first = Browser::new(&desk.origin);
+    first.open(&desk.batch).await;
+    let code = first.code(&desk.batch).await;
+    let mut second = Browser::new(&desk.origin);
+    second.open(&desk.batch).await;
+    second.code(&desk.batch).await;
+    let now = desk.service.now();
+    let sessions: Vec<String> = desk
+        .service
+        .with_store(|store| {
+            let hash = reimb_bot::store::sha256_hex(code.as_bytes());
+            let holder = store.session_by_code(&hash, now)?.unwrap().id_hash;
+            let mut all = Vec::new();
+            for browser in [&first, &second] {
+                let raw = browser.cookie.as_ref().unwrap().split('=').nth(1).unwrap();
+                all.push(reimb_bot::store::sha256_hex(raw.as_bytes()));
+            }
+            assert_eq!(holder, all[0]);
+            Ok::<_, rusqlite::Error>(all)
+        })
+        .unwrap();
+    // The live code of one session cannot be given to another: the store refuses the clash.
+    let clash = desk
+        .service
+        .with_store(|store| {
+            let work = store.begin()?;
+            let issued = work.issue_code(
+                &sessions[1],
+                &code,
+                &reimb_bot::store::sha256_hex(code.as_bytes()),
+                now + 600,
+                now,
+            )?;
+            work.commit()?;
+            Ok::<_, rusqlite::Error>(issued)
+        })
+        .unwrap();
+    assert!(!clash);
+    // The code pairs its own session and nothing else; a second claim of the same code finds nothing.
+    desk.service
+        .receive_text(LINYI, ROOM, "$pair", &code)
+        .await
+        .unwrap();
+    assert_eq!(first.state(&desk.batch).await.1["paired"], true);
+    assert_eq!(second.state(&desk.batch).await.1["paired"], false);
+    let again = desk
+        .service
+        .with_store(|store| {
+            let work = store.begin()?;
+            work.claim_code(
+                &sessions[0],
+                &reimb_bot::store::sha256_hex(code.as_bytes()),
+                ZHOUMIN,
+                now + 3600,
+                now,
+            )
+        })
+        .unwrap();
+    assert!(!again);
+    // Every outcome is in the pairing audit.
+    let audit = desk
+        .service
+        .with_store(|store| store.pairing_audit(&desk.batch))
+        .unwrap();
+    assert_eq!(audit, vec![(LINYI.to_string(), "paired".to_string())]);
+}
+
+#[tokio::test]
+async fn five_wrong_codes_withdraw_every_live_code() {
+    // Wrong codes from five different senders: no sender reaches its own limit, yet each live code has now
+    // absorbed five wrong attempts and is withdrawn (design §9.3 "每码最多 5 次错误尝试，超限作废").
+    let desk = desk().await;
+    let mut browser = Browser::new(&desk.origin);
+    browser.open(&desk.batch).await;
+    let code = browser.code(&desk.batch).await;
+    let wrong = if code == "000000" { "000001" } else { "000000" };
+    for index in 0..5 {
+        desk.service
+            .receive_text(
+                &format!("@guess{index}:reimb.local"),
+                "!guess:reimb.local",
+                &format!("$g{index}"),
+                wrong,
+            )
+            .await
+            .unwrap();
+    }
+    desk.service
+        .receive_text(LINYI, ROOM, "$late", &code)
+        .await
+        .unwrap();
+    assert_eq!(browser.state(&desk.batch).await.1["paired"], false);
+    // The page draws a fresh code, which pairs.
+    let fresh = browser.code(&desk.batch).await;
+    desk.service
+        .receive_text(LINYI, ROOM, "$fresh", &fresh)
+        .await
+        .unwrap();
+    assert_eq!(browser.state(&desk.batch).await.1["paired"], true);
+    let results: Vec<String> = desk
+        .service
+        .with_store(|store| store.pairing_audit(&desk.batch))
+        .unwrap()
+        .into_iter()
+        .map(|(_, result)| result)
+        .collect();
+    assert_eq!(results, ["paired"]);
+    let unknown = desk
+        .service
+        .with_store(|store| store.pairing_audit("-"))
+        .unwrap();
+    assert_eq!(
+        unknown.len(),
+        6,
+        "five guesses and the withdrawn code: {unknown:?}"
+    );
+}
+
+#[tokio::test]
+async fn one_batch_holds_a_bounded_number_of_unpaired_sessions() {
+    let desk = desk().await;
+    for _ in 0..20 {
+        assert_eq!(
+            Browser::new(&desk.origin).open(&desk.batch).await,
+            StatusCode::OK
+        );
+    }
+    assert_eq!(
+        Browser::new(&desk.origin).open(&desk.batch).await,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    // Sessions older than their cookie are dropped, which frees room.
+    desk.harness.clock.fetch_add(3601, Ordering::SeqCst);
+    assert_eq!(
+        Browser::new(&desk.origin).open(&desk.batch).await,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn every_route_answers_only_to_the_desk_host() {
+    let desk = desk().await;
+    let browser = paired(&desk, LINYI, "$pair").await;
+    let port = desk.origin.rsplit(':').next().unwrap();
+    for path in [
+        format!("/desk/b/{}", desk.batch),
+        format!("/desk/api/b/{}/state", desk.batch),
+        "/health".to_string(),
+    ] {
+        let response = browser
+            .http
+            .get(format!("{}{path}", desk.origin))
+            .header("host", format!("rebound.example:{port}"))
+            .header("cookie", browser.cookie.clone().unwrap())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::MISDIRECTED_REQUEST, "{path}");
+    }
+    assert_eq!(
+        browser
+            .status(&format!("/desk/api/b/{}/state", desk.batch))
+            .await,
+        StatusCode::OK
     );
 }
 
@@ -550,6 +817,18 @@ async fn whole_flow_through_the_desk_and_a_clean_access_log() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     assert!(response.bytes().await.unwrap().starts_with(b"PK"));
+    // Finance, paired with their own account, downloads the published ledger too.
+    let finance = paired(&desk, ZHOUMIN, "$fin").await;
+    assert_eq!(
+        finance
+            .status(&format!(
+                "/desk/api/b/{}/files/{}",
+                desk.batch,
+                urlencode(&ledger)
+            ))
+            .await,
+        StatusCode::OK
+    );
     let log = std::fs::read_to_string(desk.harness.root.join("desk-access.log")).unwrap();
     let secret = browser.cookie.unwrap();
     let secret = secret.split('=').nth(1).unwrap();

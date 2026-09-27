@@ -16,7 +16,7 @@ use crate::{
     core_client::{CoreClient, CoreCommand, CoreFailure},
     reconcile::{self, Assessment, Reading, ReconcileError, SourceFile},
     report::{self, yuan},
-    store::{Audit, Batch, State, Store, sha256_hex},
+    store::{Audit, Batch, State, Store, Work, sha256_hex},
     validate::yuan_to_cents,
 };
 
@@ -80,12 +80,40 @@ impl From<CoreFailure> for ServiceError {
 
 pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
 
+/// Points inside `execute` where a test can stop the run as if the process died there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stage {
+    Packaged,
+    Published,
+}
+
+pub type Fault = Arc<dyn Fn(Stage) -> bool + Send + Sync>;
+
 pub struct Service {
     pub config: ServiceConfig,
     store: Mutex<Store>,
     agent: tokio::sync::Mutex<AgentPort>,
     serial: tokio::sync::Mutex<()>,
     clock: Clock,
+    fault: Mutex<Option<Fault>>,
+}
+
+/// Marks an inbound event handled and queues its replies, inside the caller's unit of work, so the event, the
+/// business change and the replies commit together: a crash before the commit replays the event, after it nothing
+/// is lost and nothing is sent twice.
+fn answer(
+    work: &Work<'_>,
+    batch: &str,
+    room: &str,
+    event_id: &str,
+    contents: &[Value],
+) -> rusqlite::Result<()> {
+    work.mark_inbound(event_id)?;
+    let key = sha256_hex(event_id.as_bytes());
+    for (index, content) in contents.iter().enumerate() {
+        work.enqueue(batch, room, &format!("r-{}-{index}", &key[..24]), content)?;
+    }
+    Ok(())
 }
 
 /// A chat reply produced by an inbound event; queued with a transaction id derived from that event.
@@ -154,7 +182,22 @@ impl Service {
             agent: tokio::sync::Mutex::new(agent),
             serial: tokio::sync::Mutex::new(()),
             clock,
+            fault: Mutex::new(None),
         }
+    }
+
+    /// Test hook: `execute` stops without recording anything at every stage where `fault` returns true.
+    #[doc(hidden)]
+    pub fn set_fault(&self, fault: Option<Fault>) {
+        *self.fault.lock().expect("fault lock poisoned") = fault;
+    }
+
+    fn stopped_at(&self, stage: Stage) -> bool {
+        self.fault
+            .lock()
+            .expect("fault lock poisoned")
+            .as_ref()
+            .is_some_and(|fault| fault(stage))
     }
 
     pub fn now(&self) -> i64 {
@@ -197,27 +240,51 @@ impl Service {
             .and_then(|value| serde_json::from_value(value).ok()))
     }
 
-    /// Queues replies to one inbound event, idempotent on the event id.
+    /// Answers one inbound event that changes nothing else: marks it handled and queues the replies together.
     fn reply(
         &self,
         batch: &str,
         room: &str,
-        key: &str,
+        event_id: &str,
         contents: &[Value],
     ) -> Result<(), ServiceError> {
         self.with_store(|store| -> rusqlite::Result<()> {
             let work = store.begin()?;
-            for (index, content) in contents.iter().enumerate() {
-                work.enqueue(
-                    batch,
-                    room,
-                    &format!("r-{}-{index}", &sha256_hex(key.as_bytes())[..24]),
-                    content,
-                )?;
-            }
+            answer(&work, batch, room, event_id, contents)?;
             work.commit()
         })?;
         Ok(())
+    }
+
+    fn seen(&self, event_id: &str) -> Result<bool, ServiceError> {
+        Ok(self.with_store(|store| store.inbound_seen(event_id))?)
+    }
+
+    /// Runs one inbound handler; if it fails before committing, the event is answered once with an error notice
+    /// and marked handled, so the person knows to send it again.
+    async fn inbound(
+        &self,
+        room: &str,
+        event_id: &str,
+        handler: impl std::future::Future<Output = Result<(), ServiceError>>,
+    ) -> Result<(), ServiceError> {
+        match handler.await {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                let _serial = self.serial.lock().await;
+                if !self.seen(event_id)? {
+                    self.reply(
+                        "-",
+                        room,
+                        event_id,
+                        &[notice(
+                            "这一步出错了，已记录。请把刚才的消息或文件再发一次。",
+                        )],
+                    )?;
+                }
+                Err(error)
+            }
+        }
     }
 
     fn open_batch(&self, sender: &str, room: &str) -> Result<Batch, ServiceError> {
@@ -258,8 +325,24 @@ impl Service {
         name: &str,
         bytes: &[u8],
     ) -> Result<(), ServiceError> {
+        self.inbound(
+            room,
+            event_id,
+            self.take_file(sender, room, event_id, name, bytes),
+        )
+        .await
+    }
+
+    async fn take_file(
+        &self,
+        sender: &str,
+        room: &str,
+        event_id: &str,
+        name: &str,
+        bytes: &[u8],
+    ) -> Result<(), ServiceError> {
         let _serial = self.serial.lock().await;
-        if !self.claim_inbound(event_id)? {
+        if self.seen(event_id)? {
             return Ok(());
         }
         if !self.allowed_applicant(sender) {
@@ -303,7 +386,8 @@ impl Service {
             Err(error) => return Err(error.into()),
         };
         let now = self.now();
-        let (added, count) = self.with_store(|store| -> rusqlite::Result<(bool, usize)> {
+        self.with_store(|store| -> rusqlite::Result<()> {
+            let before = store.files(&batch.id)?.len();
             let work = store.begin()?;
             let added = work.add_file(&batch.id, &source.id, &display)?;
             if added {
@@ -319,15 +403,18 @@ impl Service {
                     },
                 )?;
             }
-            work.commit()?;
-            Ok((added, store.files(&batch.id)?.len()))
+            let text = if added {
+                format!(
+                    "收到「{display}」，本批次共 {} 个文件。继续发，或说「开始对账」。",
+                    before + 1
+                )
+            } else {
+                format!("「{display}」已处理过，未重复入账。")
+            };
+            answer(&work, &batch.id, room, event_id, &[notice(&text)])?;
+            work.commit()
         })?;
-        let text = if added {
-            format!("收到「{display}」，本批次共 {count} 个文件。继续发，或说「开始对账」。")
-        } else {
-            format!("「{display}」已处理过，未重复入账。")
-        };
-        self.reply(&batch.id, room, event_id, &[notice(&text)])
+        Ok(())
     }
 
     /// A file the bot could not take (too large, download failed): say so once, change nothing.
@@ -340,7 +427,7 @@ impl Service {
         reason: &str,
     ) -> Result<(), ServiceError> {
         let _serial = self.serial.lock().await;
-        if !self.claim_inbound(event_id)? {
+        if self.seen(event_id)? {
             return Ok(());
         }
         let _ = sender;
@@ -355,15 +442,6 @@ impl Service {
         )
     }
 
-    fn claim_inbound(&self, event_id: &str) -> Result<bool, ServiceError> {
-        Ok(self.with_store(|store| -> rusqlite::Result<bool> {
-            let work = store.begin()?;
-            let fresh = work.mark_inbound(event_id)?;
-            work.commit()?;
-            Ok(fresh)
-        })?)
-    }
-
     /// Chat text: commands, pairing codes, or a hint.
     pub async fn receive_text(
         &self,
@@ -374,19 +452,30 @@ impl Service {
     ) -> Result<(), ServiceError> {
         let text = text.trim();
         if text.len() == 6 && text.bytes().all(|b| b.is_ascii_digit()) {
-            return self.pair(sender, room, event_id, text).await;
+            return self
+                .inbound(room, event_id, self.pair(sender, room, event_id, text))
+                .await;
         }
         match text {
-            "开始对账" => self.start(sender, room, event_id).await,
-            "重开收件" => self.reopen(sender, room, event_id).await,
-            "重试" => self.retry(sender, room, event_id).await,
+            "开始对账" => {
+                self.inbound(room, event_id, self.start(sender, room, event_id))
+                    .await
+            }
+            "重开收件" => {
+                self.inbound(room, event_id, self.reopen(sender, room, event_id))
+                    .await
+            }
+            "重试" => {
+                self.inbound(room, event_id, self.retry(sender, room, event_id))
+                    .await
+            }
             _ => Ok(()),
         }
     }
 
     async fn start(&self, sender: &str, room: &str, event_id: &str) -> Result<(), ServiceError> {
         let _serial = self.serial.lock().await;
-        if !self.claim_inbound(event_id)? || !self.allowed_applicant(sender) {
+        if self.seen(event_id)? || !self.allowed_applicant(sender) {
             return Ok(());
         }
         let Some(batch) = self.with_store(|store| store.open_batch_for(sender))? else {
@@ -498,24 +587,33 @@ impl Service {
                             at: now,
                         },
                     )?;
-                    let key = sha256_hex(event_id.as_bytes());
-                    work.enqueue(
+                    // A fresh reading asks every question again; earlier decisions stay only as record.
+                    work.supersede_decisions(&batch.id, batch.revision + 1)?;
+                    work.set_fields(
                         &batch.id,
-                        &batch.room_id,
-                        &format!("r-{}-0", &key[..24]),
-                        &notice(&text),
+                        batch.snapshot_hash.as_deref(),
+                        batch.published_revision,
+                        batch.verify_attempts,
+                        None,
                     )?;
-                    work.enqueue(
+                    answer(
+                        &work,
                         &batch.id,
                         &batch.room_id,
-                        &format!("r-{}-1", &key[..24]),
-                        &desk_card(&self.config.desk_url, &batch.id),
+                        event_id,
+                        &[notice(&text), desk_card(&self.config.desk_url, &batch.id)],
                     )?;
                     work.commit()
                 })?;
                 Ok(())
             }
             Err(error) => {
+                // A retry that fails again keeps the step it was retrying.
+                let resume = if batch.state == State::Manual {
+                    batch.resume_state.unwrap_or(State::Collecting)
+                } else {
+                    batch.state
+                };
                 self.with_store(|store| -> rusqlite::Result<()> {
                     let work = store.begin()?;
                     work.transition(
@@ -534,13 +632,14 @@ impl Service {
                         batch.snapshot_hash.as_deref(),
                         batch.published_revision,
                         batch.verify_attempts,
-                        Some(batch.state),
+                        Some(resume),
                     )?;
-                    work.enqueue(
+                    answer(
+                        &work,
                         &batch.id,
                         &batch.room_id,
-                        &format!("r-{}-0", &sha256_hex(event_id.as_bytes())[..24]),
-                        &notice("这一步出错了，已记录，可以回复「重试」。"),
+                        event_id,
+                        &[notice("这一步出错了，已记录，可以回复「重试」。")],
                     )?;
                     work.commit()
                 })?;
@@ -549,9 +648,10 @@ impl Service {
         }
     }
 
+    /// Reopening collection leads to a fresh reading, which takes every earlier decision out of force.
     async fn reopen(&self, sender: &str, room: &str, event_id: &str) -> Result<(), ServiceError> {
         let _serial = self.serial.lock().await;
-        if !self.claim_inbound(event_id)? {
+        if self.seen(event_id)? {
             return Ok(());
         }
         let Some(batch) = self.with_store(|store| store.open_batch_for(sender))? else {
@@ -582,22 +682,24 @@ impl Service {
                     at: now,
                 },
             )?;
+            answer(
+                &work,
+                &batch.id,
+                room,
+                event_id,
+                &[notice(
+                    "已重开收件，之前的文件都保留；之前在对账台做的判断作废，重新对账后请再判断一次。继续发文件，发完说「开始对账」。",
+                )],
+            )?;
             work.commit()
         })?;
-        self.reply(
-            &batch.id,
-            room,
-            event_id,
-            &[notice(
-                "已重开收件，之前的文件和判断都保留。继续发文件，发完说「开始对账」。",
-            )],
-        )
+        Ok(())
     }
 
     async fn retry(&self, sender: &str, room: &str, event_id: &str) -> Result<(), ServiceError> {
         let batch = {
             let _serial = self.serial.lock().await;
-            if !self.claim_inbound(event_id)? {
+            if self.seen(event_id)? {
                 return Ok(());
             }
             let Some(batch) = self.with_store(|store| store.open_batch_for(sender))? else {
@@ -612,6 +714,10 @@ impl Service {
                 );
             }
             let resume = batch.resume_state.unwrap_or(State::Collecting);
+            if resume == State::Collecting {
+                // Reading again moves the batch straight from manual to its result and answers this event.
+                return self.run_reconciliation(batch, sender, event_id).await;
+            }
             let now = self.now();
             self.with_store(|store| -> rusqlite::Result<()> {
                 let work = store.begin()?;
@@ -633,24 +739,26 @@ impl Service {
                     batch.verify_attempts,
                     None,
                 )?;
+                let contents = if resume == State::Executing {
+                    Vec::new()
+                } else {
+                    vec![notice(&format!("已回到「{}」。", resume.label()))]
+                };
+                answer(&work, &batch.id, room, event_id, &contents)?;
                 work.commit()
             })?;
             self.batch(&batch.id)?
         };
-        match batch.state {
-            State::Collecting => {
-                let _serial = self.serial.lock().await;
-                self.run_reconciliation(batch, sender, &format!("{event_id}#retry"))
-                    .await
-            }
-            State::Executing => self.execute(&batch.id).await,
-            _ => Ok(()),
+        if batch.state == State::Executing {
+            self.execute(&batch.id).await?;
         }
+        Ok(())
     }
 
     // --- Pairing ---------------------------------------------------------------------------------------------
 
     /// A code typed in chat binds the waiting desk session to the sender the homeserver authenticated.
+    /// The code is consumed atomically; every outcome is written to the pairing audit with the chat reply.
     async fn pair(
         &self,
         sender: &str,
@@ -659,7 +767,7 @@ impl Service {
         code: &str,
     ) -> Result<(), ServiceError> {
         let _serial = self.serial.lock().await;
-        if !self.claim_inbound(event_id)? {
+        if self.seen(event_id)? {
             return Ok(());
         }
         let now = self.now();
@@ -672,53 +780,53 @@ impl Service {
                 &[notice("配对码错误次数过多，请 10 分钟后再试。")],
             );
         }
-        let found =
-            self.with_store(|store| store.session_by_code(&sha256_hex(code.as_bytes()), now))?;
-        let Some(mut session) = found else {
+        let code_hash = sha256_hex(code.as_bytes());
+        let found = self.with_store(|store| store.session_by_code(&code_hash, now))?;
+        let refuse = |batch: &str, session: &str, result: &str, text: &str| {
             self.with_store(|store| -> rusqlite::Result<()> {
                 let work = store.begin()?;
                 work.record_failure(sender, now)?;
+                work.spend_code_attempt(now)?;
+                work.audit_pairing(batch, session, sender, result, now)?;
+                answer(&work, "-", room, event_id, &[notice(text)])?;
                 work.commit()
-            })?;
-            return self.reply(
-                "-",
-                room,
-                event_id,
-                &[notice(
-                    "配对码无效或已过期。请在对账台页面刷新后使用新的配对码。",
-                )],
-            );
+            })
+        };
+        const INVALID: &str = "配对码无效或已过期。请在对账台页面刷新后使用新的配对码。";
+        let Some(session) = found else {
+            refuse("-", "-", "unknown_code", INVALID)?;
+            return Ok(());
         };
         let batch = self.batch(&session.batch_id)?;
         if !self.may_view(&batch, sender)? {
-            self.with_store(|store| -> rusqlite::Result<()> {
-                let work = store.begin()?;
-                work.record_failure(sender, now)?;
-                work.commit()
-            })?;
-            return self.reply(
-                "-",
+            refuse(
+                &batch.id,
+                &session.id_hash,
+                "not_allowed",
+                "这个批次不属于你，不能配对。",
+            )?;
+            return Ok(());
+        }
+        let paired = self.with_store(|store| -> rusqlite::Result<bool> {
+            let work = store.begin()?;
+            if !work.claim_code(&session.id_hash, &code_hash, sender, now + 3600, now)? {
+                return Ok(false);
+            }
+            work.audit_pairing(&batch.id, &session.id_hash, sender, "paired", now)?;
+            answer(
+                &work,
+                &batch.id,
                 room,
                 event_id,
-                &[notice("这个批次不属于你，不能配对。")],
-            );
-        }
-        session.paired_user = Some(sender.to_string());
-        session.paired_until = Some(now + 3600);
-        session.code = None;
-        session.code_hash = None;
-        session.code_expires_at = None;
-        self.with_store(|store| -> rusqlite::Result<()> {
-            let work = store.begin()?;
-            work.put_session(&session)?;
-            work.commit()
+                &[notice("配对成功。回到对账台页面即可继续，1 小时内有效。")],
+            )?;
+            work.commit()?;
+            Ok(true)
         })?;
-        self.reply(
-            &batch.id,
-            room,
-            event_id,
-            &[notice("配对成功。回到对账台页面即可继续，1 小时内有效。")],
-        )
+        if !paired {
+            refuse(&batch.id, &session.id_hash, "code_gone", INVALID)?;
+        }
+        Ok(())
     }
 
     pub fn may_view(&self, batch: &Batch, user: &str) -> Result<bool, ServiceError> {
@@ -822,6 +930,10 @@ impl Service {
             .invoice
             .clone()
             .ok_or_else(|| ServiceError::Invalid("no reading to confirm".into()))?;
+        // Each item is confirmed once; its facts stay bound to that one confirmation decision.
+        if candidate["invoice_no"]["level"] != "candidate" {
+            return Err(ServiceError::Invalid("reading already confirmed".into()));
+        }
         let confirmed = confirm_invoice(&candidate, corrections, &event, user, &utc(now))?;
         // The core re-validates the corrected facts; a format error is returned to the page, nothing is stored.
         let core = self.core(batch_id);
@@ -1126,6 +1238,9 @@ impl Service {
             }
             Err(failure) => return self.fail(&batch, &failure.to_string(), now),
         };
+        if self.stopped_at(Stage::Packaged) {
+            return Err(ServiceError::Invalid("stopped after packaging".into()));
+        }
         let verified = match core
             .call(CoreCommand::Verify, &json!({"snapshot_hash": hash, "manifest_object_id": hash, "history_snapshot": reading.history_snapshot}))
             .await
@@ -1173,6 +1288,9 @@ impl Service {
         }
         publish(&self.batch_dir(batch_id), &hash, batch.revision)
             .map_err(|e| ServiceError::Invalid(e.to_string()))?;
+        if self.stopped_at(Stage::Published) {
+            return Err(ServiceError::Invalid("stopped after publishing".into()));
+        }
         let manifest = &packaged["staging_manifest"];
         let rows = manifest["rows"].as_array().map(Vec::len).unwrap_or(0);
         let total = manifest["total_cents"].as_i64().unwrap_or(0);
@@ -1188,27 +1306,6 @@ impl Service {
             Some((&hash, &text)),
             now,
         )
-    }
-
-    /// Test hook: package, verify and publish, then stop as if the process died before recording the result.
-    #[doc(hidden)]
-    pub async fn execute_without_commit_for_test(
-        &self,
-        batch_id: &str,
-    ) -> Result<(), ServiceError> {
-        let batch = self.batch(batch_id)?;
-        let snapshot = self
-            .with_store(|store| store.document(batch_id, "snapshot"))?
-            .ok_or(ServiceError::NotFound)?;
-        let hash = batch.snapshot_hash.clone().ok_or(ServiceError::NotFound)?;
-        let core = self.core(batch_id);
-        core.call(
-            CoreCommand::Package,
-            &json!({"confirmed_snapshot": snapshot, "expected_snapshot_hash": hash}),
-        )
-        .await?;
-        publish(&self.batch_dir(batch_id), &hash, batch.revision)
-            .map_err(|e| ServiceError::Invalid(e.to_string()))
     }
 
     fn finish(

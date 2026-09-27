@@ -86,6 +86,9 @@ pub const LINYI: &str = "@reimb-linyi:reimb.local";
 pub const ZHOUMIN: &str = "@reimb-zhoumin:reimb.local";
 pub const INTRUDER: &str = "@reimb-intruder:reimb.local";
 pub const ROOM: &str = "!linyi-bot:reimb.local";
+/// A second applicant with a batch of their own, for cross-batch checks.
+pub const SECOND: &str = "@reimb-second:reimb.local";
+pub const SECOND_ROOM: &str = "!second-bot:reimb.local";
 // 2026-10-31 09:00 in Asia/Shanghai.
 pub const MONTH_END: i64 = 1_793_408_400;
 
@@ -113,11 +116,16 @@ impl Harness {
     }
 
     pub fn service_with(&self, agent: AgentPort) -> Service {
+        self.service_using(agent, repo().join(".venv/bin/python"))
+    }
+
+    /// A service whose core runs under `python`: a broken path makes every core call fail.
+    pub fn service_using(&self, agent: AgentPort, python: PathBuf) -> Service {
         let clock = self.clock.clone();
         let config = ServiceConfig {
             data_root: self.root.clone(),
             policy: self.root.join("policy.yaml"),
-            python: repo().join(".venv/bin/python"),
+            python,
             core_dir: repo().join("core"),
             history: serde_json::from_slice(
                 &std::fs::read(repo().join("fixtures/demo/history.json")).unwrap(),
@@ -125,7 +133,10 @@ impl Harness {
             .unwrap(),
             period: "2026-10".into(),
             desk_url: "http://127.0.0.1:8787".into(),
-            applicants: BTreeMap::from([(LINYI.to_string(), ROOM.to_string())]),
+            applicants: BTreeMap::from([
+                (LINYI.to_string(), ROOM.to_string()),
+                (SECOND.to_string(), SECOND_ROOM.to_string()),
+            ]),
         };
         let store = Store::open(&self.root.join("state.sqlite")).unwrap();
         Service::new(
@@ -135,6 +146,22 @@ impl Harness {
             Arc::new(move || clock.load(Ordering::SeqCst)),
         )
     }
+}
+
+/// A stand-in interpreter that waits before running the real core, so a test can cut a handler off mid-way.
+pub fn slow_python(root: &Path, seconds: u32) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let path = root.join("slow-python");
+    std::fs::write(
+        &path,
+        format!(
+            "#!/bin/sh\nsleep {seconds}\nexec '{}' \"$@\"\n",
+            repo().join(".venv/bin/python").display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    path
 }
 
 pub async fn upload_demo(service: &Service) {

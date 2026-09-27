@@ -66,6 +66,21 @@ async function load() {
   render(state);
 }
 
+// A paired page keeps polling, but redraws only when the batch moved on, so a half-filled form is not wiped.
+async function watch() {
+  const response = await fetch(api("state"), { credentials: "same-origin", cache: "no-store" });
+  if (!response.ok) { await load(); return; }
+  const state = await response.json();
+  const seen = (s) => JSON.stringify([s.paired, s.batch && s.batch.revision, s.batch && s.batch.state, s.published]);
+  if (seen(state) !== seen(current)) {
+    current = state;
+    render(state);
+    say("批次有了新进展，页面已更新。");
+  } else {
+    pollTimer = setTimeout(watch, 5000);
+  }
+}
+
 async function post(path, body) {
   say("");
   const response = await fetch(api(path), {
@@ -103,6 +118,7 @@ function render(state) {
   for (const item of pending) content.append(itemCard(item, state, applicant));
   if (applicant && state.batch.state === "awaiting_confirm") content.append(confirmCard(state));
   if (state.published) content.append(publishedCard(state));
+  pollTimer = setTimeout(watch, 5000);
 }
 
 function itemCard(item, state, applicant) {

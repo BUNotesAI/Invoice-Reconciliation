@@ -1,8 +1,10 @@
 //! The reconciliation desk: a web page opened from the chat card, paired to a Matrix identity through the chat.
 //!
 //! The page URL carries only the batch id. A browser session is a high-entropy HttpOnly cookie; before pairing it
-//! sees a code and nothing else. Every read and write re-checks the paired user against the batch, writes also
-//! check Host, Origin, a CSRF token and the expected revision. The access log never records cookies or bodies.
+//! sees a code and nothing else. Every request must name the desk's own Host; every read and write re-checks the
+//! paired user against the batch, writes also check Origin, a CSRF token and the expected revision. Live pairing
+//! codes are unique, consumed once and withdrawn after five wrong attempts. The access log never records cookies or
+//! bodies.
 // Handlers return an early `Response` as their error; it is built once per request, so its size does not matter.
 #![allow(clippy::result_large_err)]
 
@@ -27,6 +29,9 @@ use crate::{
 
 pub const COOKIE: &str = "reimb_desk";
 const CODE_SECONDS: i64 = 600;
+const SESSION_SECONDS: i64 = 3600;
+/// Unpaired sessions one batch may hold within a cookie lifetime; bounds how many live codes anyone can farm.
+const UNPAIRED_PER_BATCH: i64 = 20;
 
 #[derive(Clone)]
 pub struct DeskConfig {
@@ -57,8 +62,22 @@ pub fn router(service: Arc<Service>, config: DeskConfig) -> Router {
         )
         .route("/desk/api/b/{batch}/confirm", post(confirm))
         .route("/desk/api/b/{batch}/decline", post(decline))
+        .layer(middleware::from_fn_with_state(desk.clone(), host_guard))
         .layer(middleware::from_fn_with_state(desk.clone(), access_log))
         .with_state(desk)
+}
+
+/// Every route, reads included, answers only to the desk's own host, so a rebound DNS name cannot reach it.
+async fn host_guard(State(desk): State<Desk>, request: Request, next: Next) -> Response {
+    let expected = desk.config.origin.split("://").nth(1).unwrap_or_default();
+    let host = request
+        .headers()
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok());
+    if host != Some(expected) {
+        return error(StatusCode::MISDIRECTED_REQUEST, "host");
+    }
+    next.run(request).await
 }
 
 /// One JSON line per request: time, method, path, status, duration. No query, headers, cookies or bodies.
@@ -182,29 +201,26 @@ async fn page(State(desk): State<Desk>, Path(batch): Path<String>, headers: Head
         return response;
     }
     let raw = random_token();
-    let session = DeskSession {
-        id_hash: sha256_hex(raw.as_bytes()),
-        csrf: random_token(),
-        batch_id: batch,
-        code: None,
-        code_hash: None,
-        code_expires_at: None,
-        paired_user: None,
-        paired_until: None,
-    };
-    if desk
-        .service
-        .with_store(|store| {
-            store.begin().and_then(|work| {
-                work.put_session(&session)?;
-                work.commit()
-            })
-        })
-        .is_err()
-    {
-        return error(StatusCode::INTERNAL_SERVER_ERROR, "internal");
+    let now = desk.service.now();
+    let created = desk.service.with_store(|store| -> rusqlite::Result<bool> {
+        let work = store.begin()?;
+        work.drop_stale_sessions(now - SESSION_SECONDS)?;
+        work.commit()?;
+        if store.unpaired_sessions_since(&batch, now - SESSION_SECONDS)? >= UNPAIRED_PER_BATCH {
+            return Ok(false);
+        }
+        let work = store.begin()?;
+        work.create_session(&sha256_hex(raw.as_bytes()), &random_token(), &batch, now)?;
+        work.commit()?;
+        Ok(true)
+    });
+    match created {
+        Ok(true) => {}
+        Ok(false) => return error(StatusCode::TOO_MANY_REQUESTS, "too_many_sessions"),
+        Err(_) => return error(StatusCode::INTERNAL_SERVER_ERROR, "internal"),
     }
-    let cookie = format!("{COOKIE}={raw}; HttpOnly; SameSite=Strict; Path=/desk; Max-Age=3600");
+    let cookie =
+        format!("{COOKIE}={raw}; HttpOnly; SameSite=Strict; Path=/desk; Max-Age={SESSION_SECONDS}");
     response.headers_mut().insert(
         header::SET_COOKIE,
         HeaderValue::from_str(&cookie).expect("cookie is ASCII"),
@@ -235,21 +251,30 @@ async fn state(
         let code = match current {
             Some(code) => code,
             None => {
-                let code = pairing_code();
-                session.code = Some(code.clone());
-                session.code_hash = Some(sha256_hex(code.as_bytes()));
-                session.code_expires_at = Some(now + CODE_SECONDS);
-                session.paired_user = None;
-                session.paired_until = None;
-                let saved = desk.service.with_store(|store| {
-                    store.begin().and_then(|work| {
-                        work.put_session(&session)?;
-                        work.commit()
-                    })
-                });
-                if saved.is_err() {
+                // Draw until the code is free among live codes; the unique index makes a clash impossible to store.
+                let issued = desk
+                    .service
+                    .with_store(|store| -> rusqlite::Result<Option<String>> {
+                        for _ in 0..20 {
+                            let code = pairing_code();
+                            let work = store.begin()?;
+                            if work.issue_code(
+                                &session.id_hash,
+                                &code,
+                                &sha256_hex(code.as_bytes()),
+                                now + CODE_SECONDS,
+                                now,
+                            )? {
+                                work.commit()?;
+                                return Ok(Some(code));
+                            }
+                        }
+                        Ok(None)
+                    });
+                let Ok(Some(code)) = issued else {
                     return error(StatusCode::INTERNAL_SERVER_ERROR, "internal");
-                }
+                };
+                session.code_expires_at = Some(now + CODE_SECONDS);
                 code
             }
         };
