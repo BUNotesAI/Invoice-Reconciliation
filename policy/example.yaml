@@ -1,0 +1,24 @@
+company:
+  name: 示例科技有限公司
+  tax_id: 91440300XXXXXXXX0A
+timezone: Asia/Shanghai
+finance: ["@reimb-zhoumin:reimb.local"]
+cycle: monthly
+remind_at: "last_day 09:00"
+limits:
+  hotel_per_night_cents: 50000
+  meal_per_day_cents: 15000
+  local_taxi_per_day_cents: 5000
+over_limit: {explain_by: applicant, approve_by: finance}
+categories:
+  餐饮: {btype: 餐饮, summary: 餐饮费}
+  打车: {btype: 差旅费, summary: 差旅-交通费}
+  机票: {btype: 差旅费, summary: 差旅-交通费}
+  住宿: {btype: 差旅费, summary: 差旅-住宿费}
+  电脑: {btype: 办公设备, summary: 办公设备}
+short_names: {北京滴滴出行科技有限公司: 滴滴, 瑞幸咖啡: 瑞幸}
+naming:
+  pdf: "{invoice_no}_{short}_{amount}_{category}.pdf"
+  package_dir: "{date}{applicant}报销"
+evidence_window_days: 7
+ignored_merchants: []
