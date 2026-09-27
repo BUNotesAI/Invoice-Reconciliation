@@ -1,4 +1,5 @@
-//! Script steps 2-11 over the real local Palpo: the bot in-process, 林一 and a stranger as scripted Matrix clients.
+//! Script steps 2-14 over the real local Palpo: the bot in-process, 林一, 周敏 (finance) and a stranger as scripted
+//! Matrix clients.
 //!
 //! Opt-in: `REIMB_LIVE=1 cargo test --test matrix_live -- --nocapture`. Needs `python3 scripts/dev_env.py` first;
 //! reads account tokens from `$REIMB_DATA/credentials.json` (default ~/.reimb-demo) and never prints them.
@@ -260,6 +261,11 @@ async fn script_over_real_matrix() {
         .to_string();
     let linyi = Person::new(&credentials, "reimb-linyi", "applicant_bot");
     let stranger = Person::new(&credentials, "reimb-intruder", "intruder_bot");
+    let zhoumin_id = credentials["accounts"]["reimb-zhoumin"]["user_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let zhoumin = Person::new(&credentials, "reimb-zhoumin", "finance_bot");
     let since = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -284,6 +290,7 @@ async fn script_over_real_matrix() {
             period: "2026-10".into(),
             desk_url: origin.clone(),
             applicants: BTreeMap::from([(linyi_id.clone(), linyi.room.clone())]),
+            finance_rooms: BTreeMap::from([(zhoumin_id.clone(), zhoumin.room.clone())]),
         },
         Store::open(&root.join("state.sqlite")).unwrap(),
         scripted(honest),
@@ -560,6 +567,95 @@ async fn script_over_real_matrix() {
             since,
             "reply after the restart",
             body_contains("当前没有需要重试的步骤"),
+        )
+        .await;
+
+    // Step 12: 林一 shares with finance; 周敏 gets a notice and a card in her own room and pairs with her own account.
+    desk.state().await;
+    assert_eq!(desk.post("submit", json!({})).await, StatusCode::OK);
+    linyi
+        .wait_for(&bot_user, since, "submitted", body_contains("已提交给财务"))
+        .await;
+    zhoumin
+        .wait_for(
+            &bot_user,
+            since,
+            "finance notice",
+            body_contains("请在对账台审核"),
+        )
+        .await;
+    let card = zhoumin
+        .wait_for(&bot_user, since, "finance card", |c| {
+            c["msgtype"] == "rs.robius.robrix.mini_app"
+        })
+        .await;
+    assert_eq!(card["content"]["mini_app"]["url"].as_str().unwrap(), url);
+    let mut finance = Browser::open(&origin, &batch).await;
+    let code = finance.state().await["code"].as_str().unwrap().to_string();
+    zhoumin.text(&code).await;
+    zhoumin
+        .wait_for(
+            &bot_user,
+            since,
+            "finance pairing",
+            body_contains("配对成功"),
+        )
+        .await;
+    let state = finance.state().await;
+    assert_eq!(
+        (state["role"].clone(), state["user"].clone()),
+        (json!("finance"), json!(zhoumin_id))
+    );
+    // 周敏 has none of 林一's rights: she cannot decide or confirm.
+    assert_eq!(
+        finance.post("confirm", json!({})).await,
+        StatusCode::FORBIDDEN
+    );
+
+    // Step 13: finance returns one item, which makes a new revision.
+    let submitted = finance.revision;
+    let f08 = id_of("F08.pdf");
+    assert_eq!(
+        finance
+            .post(
+                "return",
+                json!({"items": {f08.clone(): "请补充住宿的事由和人数"}})
+            )
+            .await,
+        StatusCode::OK
+    );
+    linyi
+        .wait_for(
+            &bot_user,
+            since,
+            "return notice",
+            body_contains("财务退回了 1 项"),
+        )
+        .await;
+
+    // Step 14: 林一 supplements from the rule template, confirms the rebuilt revision and resubmits; finance approves.
+    desk.state().await;
+    assert!(desk.revision > submitted);
+    assert_eq!(
+        desk.post(
+            "supplement",
+            json!({"item_id": f08, "people": 3, "purpose": "客户会展接待"})
+        )
+        .await,
+        StatusCode::OK
+    );
+    desk.state().await;
+    assert_eq!(desk.post("confirm", json!({})).await, StatusCode::OK);
+    desk.state().await;
+    assert_eq!(desk.post("submit", json!({})).await, StatusCode::OK);
+    finance.state().await;
+    assert_eq!(finance.post("approve", json!({})).await, StatusCode::OK);
+    linyi
+        .wait_for(
+            &bot_user,
+            since,
+            "approval",
+            body_contains("财务已审批通过"),
         )
         .await;
 }

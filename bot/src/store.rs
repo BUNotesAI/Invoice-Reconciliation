@@ -17,6 +17,8 @@ pub enum State {
     Executing,
     OutputWait,
     ReadyToShare,
+    Submitted,
+    Approved,
     Manual,
 }
 
@@ -30,6 +32,8 @@ impl State {
             Self::Executing => "executing",
             Self::OutputWait => "output_wait",
             Self::ReadyToShare => "ready_to_share",
+            Self::Submitted => "submitted",
+            Self::Approved => "approved",
             Self::Manual => "manual",
         }
     }
@@ -43,6 +47,8 @@ impl State {
             "executing" => Self::Executing,
             "output_wait" => Self::OutputWait,
             "ready_to_share" => Self::ReadyToShare,
+            "submitted" => Self::Submitted,
+            "approved" => Self::Approved,
             "manual" => Self::Manual,
             _ => return None,
         })
@@ -58,6 +64,8 @@ impl State {
             Self::Executing => "执行",
             Self::OutputWait => "执行等待",
             Self::ReadyToShare => "待分享",
+            Self::Submitted => "已交财务",
+            Self::Approved => "已通过",
             Self::Manual => "等人工",
         }
     }
@@ -286,6 +294,28 @@ impl Store {
             .collect()
     }
 
+    /// The appended history ledger in order, optionally without one batch's own events (finding F6).
+    pub fn history_events(&self, excluding: Option<&str>) -> rusqlite::Result<Vec<Value>> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT body FROM history_events WHERE batch_id != ?1 ORDER BY seq")?;
+        statement
+            .query_map([excluding.unwrap_or("")], |row| row.get::<_, String>(0))?
+            .map(|r| r.map(|text| parse(&text)))
+            .collect()
+    }
+
+    pub fn has_history_event(&self, invoice_no: &str, status: &str) -> rusqlite::Result<bool> {
+        self.connection
+            .query_row(
+                "SELECT 1 FROM history_events WHERE invoice_no = ?1 AND status = ?2",
+                params![invoice_no, status],
+                |_| Ok(()),
+            )
+            .optional()
+            .map(|found| found.is_some())
+    }
+
     pub fn setting(&self, key: &str) -> rusqlite::Result<Option<String>> {
         self.connection
             .query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| {
@@ -455,6 +485,33 @@ impl Work<'_> {
             "INSERT OR IGNORE INTO outbox (batch_id, room_id, txn_id, content) VALUES (?1, ?2, ?3, ?4)",
             params![batch, room_id, txn_id, content.to_string()],
         )?;
+        Ok(())
+    }
+
+    pub fn has_history_event(&self, invoice_no: &str, status: &str) -> rusqlite::Result<bool> {
+        self.tx
+            .query_row(
+                "SELECT 1 FROM history_events WHERE invoice_no = ?1 AND status = ?2",
+                params![invoice_no, status],
+                |_| Ok(()),
+            )
+            .optional()
+            .map(|found| found.is_some())
+    }
+
+    /// Appends one history event; the same invoice, status and batch is recorded once.
+    pub fn add_history_event(&self, batch: &str, body: &Value) -> rusqlite::Result<bool> {
+        let added = self.tx.execute(
+            "INSERT OR IGNORE INTO history_events (batch_id, invoice_no, status, body) VALUES (?1, ?2, ?3, ?4)",
+            params![batch, body["invoice_no"].as_str().unwrap_or_default(), body["status"].as_str().unwrap_or_default(), body.to_string()],
+        )?;
+        Ok(added == 1)
+    }
+
+    /// A finished batch stops being the applicant's open batch; its records stay.
+    pub fn close_batch(&self, batch: &str) -> rusqlite::Result<()> {
+        self.tx
+            .execute("UPDATE batches SET closed = 1 WHERE id = ?1", [batch])?;
         Ok(())
     }
 
@@ -656,6 +713,9 @@ CREATE TABLE IF NOT EXISTS desk_sessions (
   id_hash TEXT PRIMARY KEY, csrf TEXT NOT NULL, batch_id TEXT NOT NULL, code_hash TEXT, code_expires_at INTEGER,
   paired_user TEXT, paired_until INTEGER, code TEXT, code_failures INTEGER NOT NULL DEFAULT 0,
   created INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS history_events (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT, batch_id TEXT NOT NULL, invoice_no TEXT NOT NULL, status TEXT NOT NULL,
+  body TEXT NOT NULL, UNIQUE (invoice_no, status, batch_id));
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS pairing_failures (sender TEXT NOT NULL, at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS pairing_audit (

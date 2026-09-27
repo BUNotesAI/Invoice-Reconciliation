@@ -33,6 +33,7 @@ def bot_config():
         "desk_origin": "http://127.0.0.1:8787",
         "agent": os.environ.get("REIMB_AGENT", "replay:" + str(ROOT / "fixtures" / "agent-replay" / "demo")),
         "applicants": {credentials["accounts"]["reimb-linyi"]["user_id"]: credentials["rooms"]["applicant_bot"]},
+        "finance_rooms": {credentials["accounts"]["reimb-zhoumin"]["user_id"]: credentials["rooms"]["finance_bot"]},
     }
     path = DATA / "bot.json"
     private_json(path, config)

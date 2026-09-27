@@ -281,9 +281,14 @@ pub async fn run_sync(client: Client, service: Arc<Service>) -> Result<()> {
 
 /// Outbox sender and month-end reminder, one tick per second.
 pub async fn run_outbox(client: Client, service: Arc<Service>) -> Result<()> {
+    let mut tick: u64 = 0;
     loop {
         let _ = service.remind();
+        if tick.is_multiple_of(30) {
+            let _ = service.retry_waiting().await;
+        }
         send_outbox(&client, &service).await;
+        tick += 1;
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
 }

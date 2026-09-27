@@ -33,6 +33,8 @@ pub struct ServiceConfig {
     pub desk_url: String,
     /// Applicants allowed to open batches, with the direct room the bot uses for reminders.
     pub applicants: BTreeMap<String, String>,
+    /// Finance members' direct rooms with the bot, for submission notices.
+    pub finance_rooms: BTreeMap<String, String>,
 }
 
 #[derive(Debug)]
@@ -532,15 +534,11 @@ impl Service {
         }
         let outcome = {
             let mut agent = self.agent.lock().await;
-            match reconcile::read(
-                &core,
-                &mut agent,
-                &sources,
-                &self.config.history,
-                &batch.period,
-            )
-            .await
-            {
+            let history = match self.history_entries(&batch.id).await {
+                Ok(history) => history,
+                Err(error) => return Err(error),
+            };
+            match reconcile::read(&core, &mut agent, &sources, &history, &batch.period).await {
                 Ok(mut reading) => reconcile::assess(
                     &core,
                     &mut agent,
@@ -878,6 +876,14 @@ impl Service {
             .iter()
             .find(|view| view.item_id == item_id)
             .ok_or(ServiceError::NotFound)?;
+        if let Some(returned) = self.returned(batch_id)?
+            && returned.get(item_id).is_none()
+        {
+            // After a finance return only the returned items may change (design §8.2).
+            return Err(ServiceError::Invalid(
+                "only items finance returned can change".into(),
+            ));
+        }
         allowed_kind(kind, &view.reasons, &view.disposition)?;
         let now = self.now();
         let decision_id = format!("d-{}", random_hex(8));
@@ -1077,11 +1083,12 @@ impl Service {
             )
             .await?
         };
-        let to = if assessment.report.needs_decision.count > 0 {
-            State::NeedsDecision
-        } else {
-            State::AwaitingConfirm
-        };
+        let to =
+            if assessment.report.needs_decision.count > 0 || self.pending_returns(&batch.id)? > 0 {
+                State::NeedsDecision
+            } else {
+                State::AwaitingConfirm
+            };
         let now = self.now();
         let finished = to == State::AwaitingConfirm && batch.state == State::NeedsDecision;
         self.with_store(|store| -> rusqlite::Result<()> {
@@ -1154,7 +1161,14 @@ impl Service {
             let reading = self.reading(batch_id)?;
             let assessment = self.assessment(batch_id)?.ok_or(ServiceError::NotFound)?;
             let decisions = self.with_store(|store| store.decisions(batch_id))?;
-            let snapshot = build_snapshot(&batch, &reading, &assessment, &decisions)?;
+            let supplements = self.document_map(batch_id, "supplements")?;
+            let snapshot = build_snapshot(&batch, &reading, &assessment, &decisions, &supplements)?;
+            if let Some(previous) =
+                self.with_store(|store| store.document(batch_id, "submitted_snapshot"))?
+            {
+                let returned = self.returned(batch_id)?.unwrap_or_default();
+                frozen_items_unchanged(&previous, &snapshot, &returned)?;
+            }
             let hash = sha256_hex(canonical_json(&snapshot).as_bytes());
             let now = self.now();
             self.with_store(|store| -> rusqlite::Result<()> {
@@ -1171,7 +1185,13 @@ impl Service {
                         at: now,
                     },
                 )?;
-                work.set_fields(batch_id, Some(&hash), batch.published_revision, 0, None)?;
+                work.set_fields(
+                    batch_id,
+                    Some(&hash),
+                    batch.published_revision,
+                    batch.verify_attempts,
+                    None,
+                )?;
                 work.commit()
             })?;
             Ok(hash)
@@ -1234,7 +1254,7 @@ impl Service {
         let packaged = match packaged {
             Ok(value) => value,
             Err(CoreFailure::Rejected { code, .. }) if code == "OUTPUT_BUSY" => {
-                return self.finish(&batch, State::OutputWait, "output_busy", None, now);
+                return self.wait_for_output(&batch, &hash, now);
             }
             Err(failure) => return self.fail(&batch, &failure.to_string(), now),
         };
@@ -1251,10 +1271,11 @@ impl Service {
         let checks = verified["checks"].as_array().map(Vec::len).unwrap_or(0);
         if verified["passed"] != json!(true) {
             let attempts = batch.verify_attempts + 1;
+            // The report is shown again for a fresh confirmation; after three failed reviews a person takes over.
             let to = if attempts >= VERIFY_ATTEMPTS {
                 State::Manual
             } else {
-                State::NeedsDecision
+                State::AwaitingConfirm
             };
             self.with_store(|store| -> rusqlite::Result<()> {
                 let work = store.begin()?;
@@ -1280,14 +1301,16 @@ impl Service {
                     batch_id,
                     &batch.room_id,
                     &format!("{batch_id}-{hash}-verify-{attempts}"),
-                    &notice("终审没有通过，报销包未发布。已退回待判断，请在对账台查看原因。"),
+                    &notice("终审没有通过，报销包未发布。请在对账台查看原因后重新确认；连续三次不通过会转人工。"),
                 )?;
                 work.commit()
             })?;
             return Ok(());
         }
-        publish(&self.batch_dir(batch_id), &hash, batch.revision)
-            .map_err(|e| ServiceError::Invalid(e.to_string()))?;
+        if publish(&self.batch_dir(batch_id), &hash, batch.revision).is_err() {
+            // The target is busy or not writable: nothing is overwritten; wait and retry (design §8.1).
+            return self.wait_for_output(&batch, &hash, now);
+        }
         if self.stopped_at(Stage::Published) {
             return Err(ServiceError::Invalid("stopped after publishing".into()));
         }
@@ -1306,6 +1329,47 @@ impl Service {
             Some((&hash, &text)),
             now,
         )
+    }
+
+    fn wait_for_output(&self, batch: &Batch, hash: &str, now: i64) -> Result<(), ServiceError> {
+        self.with_store(|store| -> rusqlite::Result<()> {
+            let work = store.begin()?;
+            work.transition(batch, State::OutputWait, batch.revision, Audit { event: "output_busy", actor: "system", payload: &json!({}), at: now })?;
+            work.enqueue(&batch.id, &batch.room_id, &format!("{}-{hash}-busy", batch.id),
+                         &notice("报销包暂时写不进去（目标被占用或不可写），没有覆盖任何文件。关掉占用后会自动重试。"))?;
+            work.commit()
+        })?;
+        Ok(())
+    }
+
+    /// Periodic retry of batches waiting for their output target (design §8.1 执行等待).
+    pub async fn retry_waiting(&self) -> Result<usize, ServiceError> {
+        let waiting: Vec<Batch> = self
+            .with_store(|store| store.batches())?
+            .into_iter()
+            .filter(|b| b.state == State::OutputWait)
+            .collect();
+        let count = waiting.len();
+        for batch in waiting {
+            let now = self.now();
+            self.with_store(|store| -> rusqlite::Result<()> {
+                let work = store.begin()?;
+                work.transition(
+                    &batch,
+                    State::Executing,
+                    batch.revision,
+                    Audit {
+                        event: "retry",
+                        actor: "system",
+                        payload: &json!({}),
+                        at: now,
+                    },
+                )?;
+                work.commit()
+            })?;
+            self.execute(&batch.id).await?;
+        }
+        Ok(count)
     }
 
     fn finish(
@@ -1421,6 +1485,376 @@ impl Service {
         Ok(())
     }
 
+    // --- History ledger and the finance round trip (P4a) -----------------------------------------------------
+
+    /// Imported history plus the appended ledger, without this batch's own events (finding F6): a batch's own
+    /// earlier submission must not make its resubmitted invoices look like duplicates.
+    async fn history_entries(&self, batch: &str) -> Result<Value, ServiceError> {
+        let events = self.with_store(|store| store.history_events(Some(batch)))?;
+        let mut entries = self.config.history.as_array().cloned().unwrap_or_default();
+        if !events.is_empty() {
+            let projected = self
+                .core(batch)
+                .call(
+                    CoreCommand::History,
+                    &json!({"action": "project", "events": events}),
+                )
+                .await?;
+            let known: BTreeSet<String> = entries
+                .iter()
+                .filter_map(|e| e["invoice_no"].as_str().map(String::from))
+                .collect();
+            for entry in projected["validated_snapshot"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+            {
+                if !known.contains(entry["invoice_no"].as_str().unwrap_or_default()) {
+                    entries.push(entry);
+                }
+            }
+        }
+        Ok(Value::Array(entries))
+    }
+
+    fn document_map(&self, batch: &str, kind: &str) -> Result<Map<String, Value>, ServiceError> {
+        Ok(self
+            .with_store(|store| store.document(batch, kind))?
+            .and_then(|v| v.as_object().cloned())
+            .unwrap_or_default())
+    }
+
+    /// Items finance returned in the current round, with their reasons; `None` when nothing is returned.
+    pub fn returned(&self, batch: &str) -> Result<Option<Map<String, Value>>, ServiceError> {
+        let found = self.with_store(|store| store.document(batch, "returned"))?;
+        Ok(found.and_then(|value| value["items"].as_object().cloned()))
+    }
+
+    pub fn pending_returns(&self, batch: &str) -> Result<usize, ServiceError> {
+        let Some(returned) = self.returned(batch)? else {
+            return Ok(0);
+        };
+        let supplements = self.document_map(batch, "supplements")?;
+        Ok(returned
+            .keys()
+            .filter(|id| !supplements.contains_key(*id))
+            .count())
+    }
+
+    fn finance_only(&self, batch: &Batch, user: &str, expected: i64) -> Result<(), ServiceError> {
+        let finance = self
+            .reading(&batch.id)
+            .map(|reading| reading.finance)
+            .unwrap_or_default();
+        if !finance.iter().any(|member| member == user) {
+            return Err(ServiceError::Forbidden);
+        }
+        if batch.revision != expected {
+            return Err(ServiceError::StaleRevision(batch.revision));
+        }
+        Ok(())
+    }
+
+    fn history_event(
+        invoice: &Value,
+        status: &str,
+        actor: &str,
+        at: &str,
+        note: &str,
+        expense: Option<Value>,
+    ) -> Value {
+        let mut event = json!({"invoice_no": invoice["invoice_no"]["value"], "status": status, "actor": actor, "at": at, "note": note});
+        if let Some(expense) = expense {
+            event["expense"] = expense;
+        }
+        event
+    }
+
+    /// Step 12: the applicant shares the published revision with finance; history records the submission.
+    pub async fn submit(
+        &self,
+        batch_id: &str,
+        user: &str,
+        expected: i64,
+    ) -> Result<(), ServiceError> {
+        let _serial = self.serial.lock().await;
+        let batch = self.batch(batch_id)?;
+        self.applicant_only(&batch, user, expected)?;
+        if batch.state != State::ReadyToShare || batch.published_revision != Some(batch.revision) {
+            return Err(ServiceError::Invalid(
+                "only a published revision can be submitted".into(),
+            ));
+        }
+        let snapshot = self
+            .with_store(|store| store.document(batch_id, "snapshot"))?
+            .ok_or(ServiceError::NotFound)?;
+        let now = self.now();
+        let at = utc(now);
+        let events: Vec<Value> = snapshot["items"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .map(|item| {
+                let invoice = &item["invoice"];
+                let expense = json!({"order_ref": invoice["order_ref"]["value"], "seller_name": invoice["seller_name"]["value"],
+                                     "service_date": item["service_date"], "amount_cents": invoice["amount_cents"]["value"],
+                                     "batch_id": batch_id, "revision": batch.revision, "replaces_invoice_no": item["replaces_invoice_no"]});
+                Self::history_event(invoice, "submitted", user, &at, "提交财务", Some(expense))
+            })
+            .collect();
+        let total: i64 = snapshot["items"].as_array().map_or(0, |items| {
+            items
+                .iter()
+                .filter_map(|i| i["invoice"]["amount_cents"]["value"].as_i64())
+                .sum()
+        });
+        let count = events.len();
+        let name = applicant_name(&batch.applicant);
+        let card = desk_card(&self.config.desk_url, batch_id);
+        self.with_store(|store| -> rusqlite::Result<()> {
+            let work = store.begin()?;
+            for event in &events {
+                // An invoice resubmitted after a return keeps its first submission; the ledger never repeats it.
+                if !store_has(&work, event)? {
+                    work.add_history_event(batch_id, event)?;
+                }
+            }
+            work.put_document(batch_id, "submitted_snapshot", &snapshot)?;
+            work.put_document(batch_id, "returned", &Value::Null)?;
+            work.transition(
+                &batch,
+                State::Submitted,
+                batch.revision,
+                Audit {
+                    event: "submit_finance",
+                    actor: user,
+                    payload: &json!({}),
+                    at: now,
+                },
+            )?;
+            let text = format!(
+                "{name}提交了 {} 报销：{count} 张发票，合计 {}（版本 {}）。请在对账台审核。",
+                batch.period,
+                yuan(total),
+                batch.revision
+            );
+            for (member, room) in &self.config.finance_rooms {
+                let key = format!(
+                    "{batch_id}-{}-submit-{}",
+                    batch.revision,
+                    &sha256_hex(member.as_bytes())[..8]
+                );
+                work.enqueue(batch_id, room, &key, &notice(&text))?;
+                work.enqueue(batch_id, room, &format!("{key}-card"), &card)?;
+            }
+            work.enqueue(
+                batch_id,
+                &batch.room_id,
+                &format!("{batch_id}-{}-submitted", batch.revision),
+                &notice("已提交给财务，审核结果会在这里通知你。"),
+            )?;
+            work.commit()
+        })?;
+        Ok(())
+    }
+
+    /// Step 12: finance approves the submitted revision; history records the approval.
+    pub async fn approve(
+        &self,
+        batch_id: &str,
+        user: &str,
+        expected: i64,
+    ) -> Result<(), ServiceError> {
+        let _serial = self.serial.lock().await;
+        let batch = self.batch(batch_id)?;
+        self.finance_only(&batch, user, expected)?;
+        if batch.state != State::Submitted {
+            return Err(ServiceError::Invalid("batch is not with finance".into()));
+        }
+        let snapshot = self
+            .with_store(|store| store.document(batch_id, "submitted_snapshot"))?
+            .ok_or(ServiceError::NotFound)?;
+        let now = self.now();
+        let at = utc(now);
+        self.with_store(|store| -> rusqlite::Result<()> {
+            let work = store.begin()?;
+            for item in snapshot["items"].as_array().cloned().unwrap_or_default() {
+                work.add_history_event(
+                    batch_id,
+                    &Self::history_event(&item["invoice"], "approved", user, &at, "审批通过", None),
+                )?;
+            }
+            work.transition(
+                &batch,
+                State::Approved,
+                batch.revision,
+                Audit {
+                    event: "approve",
+                    actor: user,
+                    payload: &json!({}),
+                    at: now,
+                },
+            )?;
+            work.close_batch(batch_id)?;
+            work.enqueue(
+                batch_id,
+                &batch.room_id,
+                &format!("{batch_id}-{}-approved", batch.revision),
+                &notice(&format!(
+                    "财务已审批通过 {} 报销（版本 {}）。",
+                    batch.period, batch.revision
+                )),
+            )?;
+            work.commit()
+        })?;
+        Ok(())
+    }
+
+    /// Step 13: finance returns chosen items with a reason; a new revision opens with only those items unfrozen.
+    pub async fn return_items(
+        &self,
+        batch_id: &str,
+        user: &str,
+        expected: i64,
+        items: &Map<String, Value>,
+    ) -> Result<(), ServiceError> {
+        let _serial = self.serial.lock().await;
+        let batch = self.batch(batch_id)?;
+        self.finance_only(&batch, user, expected)?;
+        if batch.state != State::Submitted {
+            return Err(ServiceError::Invalid("batch is not with finance".into()));
+        }
+        let snapshot = self
+            .with_store(|store| store.document(batch_id, "submitted_snapshot"))?
+            .ok_or(ServiceError::NotFound)?;
+        let submitted: BTreeSet<&str> = snapshot["items"]
+            .as_array()
+            .map_or_else(BTreeSet::new, |items| {
+                items.iter().filter_map(|i| i["id"].as_str()).collect()
+            });
+        if items.is_empty() || items.len() > submitted.len() {
+            return Err(ServiceError::Invalid(
+                "return at least one submitted item".into(),
+            ));
+        }
+        for (id, reason) in items {
+            let reason = reason.as_str().unwrap_or_default().trim();
+            if !submitted.contains(id.as_str()) || reason.is_empty() || reason.chars().count() > 200
+            {
+                return Err(ServiceError::Invalid(format!("invalid return for {id}")));
+            }
+        }
+        let now = self.now();
+        let revision = batch.revision + 1;
+        let lines: Vec<String> = items
+            .iter()
+            .map(|(id, reason)| {
+                let file = self
+                    .reading(batch_id)
+                    .ok()
+                    .and_then(|r| r.items.iter().find(|i| &i.id == id).map(|i| i.file.clone()))
+                    .unwrap_or_else(|| id.clone());
+                format!("· {file}：{}", reason.as_str().unwrap_or_default().trim())
+            })
+            .collect();
+        self.with_store(|store| -> rusqlite::Result<()> {
+            let work = store.begin()?;
+            work.put_document(
+                batch_id,
+                "returned",
+                &json!({"revision": revision, "items": items, "by": user}),
+            )?;
+            work.put_document(batch_id, "supplements", &json!({}))?;
+            work.transition(
+                &batch,
+                State::NeedsDecision,
+                revision,
+                Audit {
+                    event: "return_items",
+                    actor: user,
+                    payload: &Value::Object(items.clone()),
+                    at: now,
+                },
+            )?;
+            work.enqueue(
+                batch_id,
+                &batch.room_id,
+                &format!("{batch_id}-{revision}-returned"),
+                &notice(&format!(
+                    "财务退回了 {} 项，其余不变：\n{}\n请在对账台补充说明后重新确认。",
+                    items.len(),
+                    lines.join("\n")
+                )),
+            )?;
+            work.enqueue(
+                batch_id,
+                &batch.room_id,
+                &format!("{batch_id}-{revision}-returned-card"),
+                &desk_card(&self.config.desk_url, batch_id),
+            )?;
+            work.commit()
+        })?;
+        Ok(())
+    }
+
+    /// Step 14: the applicant's supplement for a returned item, written by a rule template (people, purpose)
+    /// and shown back before it is stored; it never claims to prove anything.
+    pub async fn supplement(
+        &self,
+        batch_id: &str,
+        user: &str,
+        expected: i64,
+        item_id: &str,
+        people: i64,
+        purpose: &str,
+    ) -> Result<String, ServiceError> {
+        let _serial = self.serial.lock().await;
+        let batch = self.batch(batch_id)?;
+        self.applicant_only(&batch, user, expected)?;
+        let returned = self
+            .returned(batch_id)?
+            .ok_or_else(|| ServiceError::Invalid("nothing was returned".into()))?;
+        if batch.state != State::NeedsDecision || !returned.contains_key(item_id) {
+            return Err(ServiceError::Invalid(
+                "only returned items take a supplement".into(),
+            ));
+        }
+        let text = supplement_text(people, purpose)?;
+        let mut supplements = self.document_map(batch_id, "supplements")?;
+        supplements.insert(item_id.to_string(), json!(text));
+        let pending = returned
+            .keys()
+            .filter(|id| !supplements.contains_key(*id))
+            .count();
+        let needs = self
+            .assessment(batch_id)?
+            .map_or(0, |a| a.report.needs_decision.count);
+        let to = if pending == 0 && needs == 0 {
+            State::AwaitingConfirm
+        } else {
+            State::NeedsDecision
+        };
+        let now = self.now();
+        self.with_store(|store| -> rusqlite::Result<()> {
+            let work = store.begin()?;
+            work.put_document(batch_id, "supplements", &Value::Object(supplements.clone()))?;
+            work.transition(
+                &batch,
+                to,
+                batch.revision + 1,
+                Audit {
+                    event: "supplement",
+                    actor: user,
+                    payload: &json!({"item_id": item_id, "text": text}),
+                    at: now,
+                },
+            )?;
+            work.commit()
+        })?;
+        Ok(text)
+    }
+
     /// Step 1: the month-end reminder, at most once per applicant and period (the transaction id is the key).
     pub fn remind(&self) -> Result<usize, ServiceError> {
         let now = self.now() + BUSINESS_OFFSET_SECONDS;
@@ -1443,6 +1877,92 @@ impl Service {
         })?;
         Ok(queued)
     }
+}
+
+fn store_has(work: &crate::store::Work<'_>, event: &Value) -> rusqlite::Result<bool> {
+    work.has_history_event(
+        event["invoice_no"].as_str().unwrap_or_default(),
+        event["status"].as_str().unwrap_or_default(),
+    )
+}
+
+/// The normative supplement from the applicant's two answers; numbers and text are bounded, nothing is invented.
+pub fn supplement_text(people: i64, purpose: &str) -> Result<String, ServiceError> {
+    let purpose = purpose.trim();
+    if !(1..=200).contains(&people)
+        || purpose.is_empty()
+        || purpose.chars().count() > 60
+        || purpose.chars().any(|c| c.is_control())
+    {
+        return Err(ServiceError::Invalid(
+            "people 1-200 and a purpose of 1-60 characters".into(),
+        ));
+    }
+    Ok(format!("{purpose}，{people} 人"))
+}
+
+/// D column: category and short name, plus the confirmed supplement for a returned item.
+pub fn expense_detail(category: &str, short_name: &str, supplement: Option<&Value>) -> String {
+    match supplement.and_then(Value::as_str) {
+        Some(text) => format!("{category}：{short_name}（{text}）"),
+        None => format!("{category}：{short_name}"),
+    }
+}
+
+/// After a return, every item finance did not return must be exactly as submitted (compared by stable item id).
+pub fn frozen_items_unchanged(
+    previous: &Value,
+    next: &Value,
+    returned: &Map<String, Value>,
+) -> Result<(), ServiceError> {
+    let index = |snapshot: &Value| -> BTreeMap<String, Value> {
+        snapshot["items"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|item| Some((item["id"].as_str()?.to_string(), item)))
+            .collect()
+    };
+    let decisions = |snapshot: &Value, ids: &Value| -> Vec<Value> {
+        let wanted: BTreeSet<&str> = ids.as_array().map_or_else(BTreeSet::new, |ids| {
+            ids.iter().filter_map(Value::as_str).collect()
+        });
+        snapshot["decisions"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|d| d["id"].as_str().is_some_and(|id| wanted.contains(id)))
+            .collect()
+    };
+    let (before, after) = (index(previous), index(next));
+    for (id, item) in &before {
+        if returned.contains_key(id) {
+            continue;
+        }
+        let Some(now) = after.get(id) else {
+            return Err(ServiceError::Invalid(format!(
+                "{id} was not returned but is missing"
+            )));
+        };
+        if now != item
+            || decisions(next, &now["decision_ids"]) != decisions(previous, &item["decision_ids"])
+        {
+            return Err(ServiceError::Invalid(format!(
+                "{id} was not returned but changed"
+            )));
+        }
+    }
+    if after
+        .keys()
+        .any(|id| !before.contains_key(id) && !returned.contains_key(id))
+    {
+        return Err(ServiceError::Invalid(
+            "items were added that finance did not return".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn refusal(message: &str) -> &'static str {
@@ -1579,6 +2099,7 @@ pub fn build_snapshot(
     reading: &Reading,
     assessment: &Assessment,
     decisions: &[Value],
+    supplements: &Map<String, Value>,
 ) -> Result<Value, ServiceError> {
     let links: BTreeMap<&str, &Value> = assessment
         .links
@@ -1625,7 +2146,7 @@ pub fn build_snapshot(
         );
         items.push(json!({
             "id": item.id, "invoice": item.invoice, "service_date": link["service_date"], "category": category,
-            "short_name": short_name, "expense_detail": format!("{category}：{short_name}"),
+            "short_name": short_name, "expense_detail": expense_detail(category, &short_name, supplements.get(&item.id)),
             "decision_ids": own.iter().filter_map(|d| d["id"].as_str()).collect::<Vec<_>>(),
             "replaces_invoice_no": replaces,
         }));

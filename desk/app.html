@@ -116,8 +116,16 @@ function render(state) {
   const applicant = state.role === "applicant";
   const pending = (state.report ? state.report.items : []).filter((item) => item.disposition === "needs_decision");
   for (const item of pending) content.append(itemCard(item, state, applicant));
+  if (applicant && state.returned && state.batch.state === "needs_decision") content.append(returnedCard(state));
   if (applicant && state.batch.state === "awaiting_confirm") content.append(confirmCard(state));
   if (state.published) content.append(publishedCard(state));
+  if (applicant && state.batch.state === "ready_to_share") {
+    const card = el("div", null, "card");
+    card.append(el("strong", "提交给财务"), el("div", "提交后财务会收到通知，可以审批或退回个别项目。", "muted"),
+                button("提交给财务", () => post("submit", {})));
+    content.append(card);
+  }
+  if (state.role === "finance" && state.batch.state === "submitted") content.append(financeCard(state));
   pollTimer = setTimeout(watch, 5000);
 }
 
@@ -225,6 +233,51 @@ function confirmCard(state) {
   if (names.length) card.append(el("div", "文件名里的简称：" + Array.from(new Set(names)).join("、"), "muted"));
   card.append(button("确认生成", () => post("confirm", {})));
   const back = button("暂不生成", () => post("decline", {}));
+  back.className = "secondary";
+  card.append(back);
+  return card;
+}
+
+function returnedCard(state) {
+  const card = el("div", null, "card");
+  card.append(el("strong", "财务退回的项目"), el("div", "只有这些项目可以修改，其余保持不变。", "muted"));
+  const names = Object.fromEntries((state.report.items || []).map((item) => [item.item_id, item.short_name || item.file]));
+  for (const [itemId, reason] of Object.entries(state.returned)) {
+    const block = el("div", null, "note");
+    block.append(el("div", `${names[itemId] || itemId}：${reason}`, "reason"));
+    const done = state.supplements && state.supplements[itemId];
+    if (done) { block.append(el("div", "已补充：" + done, "muted")); card.append(block); continue; }
+    const people = input(block, "人数", "");
+    const purpose = input(block, "事由", "");
+    const preview = el("div", "", "muted");
+    const update = () => { preview.textContent = purpose.value.trim() && people.value ? `将写入费用明细：${purpose.value.trim()}，${people.value} 人` : ""; };
+    people.addEventListener("input", update); purpose.addEventListener("input", update);
+    block.append(preview, button("确认补充说明", () => post("supplement", { item_id: itemId, people: Number(people.value), purpose: purpose.value.trim() })));
+    card.append(block);
+  }
+  return card;
+}
+
+function financeCard(state) {
+  const card = el("div", null, "card");
+  card.append(el("strong", "财务审核"), el("div", "审批当前提交的版本，或勾选需要退回的项目并写明原因。", "muted"));
+  const reasons = {};
+  for (const item of (state.report.items || []).filter((row) => row.disposition === "accepted")) {
+    const row = el("div", null, "note");
+    const label = el("label", `${item.short_name || item.file} ${item.amount_cents != null ? yuan(item.amount_cents) : ""}`);
+    const reason = el("input");
+    reason.placeholder = "退回原因（留空表示不退回）";
+    reason.maxLength = 200;
+    reasons[item.item_id] = reason;
+    row.append(label, reason);
+    card.append(row);
+  }
+  card.append(button("审批通过", () => post("approve", {})));
+  const back = button("退回所填项目", () => {
+    const items = Object.fromEntries(Object.entries(reasons).filter(([, node]) => node.value.trim()).map(([id, node]) => [id, node.value.trim()]));
+    if (!Object.keys(items).length) { say("请至少为一项填写退回原因"); return; }
+    post("return", { items });
+  });
   back.className = "secondary";
   card.append(back);
   return card;

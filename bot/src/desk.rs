@@ -62,6 +62,10 @@ pub fn router(service: Arc<Service>, config: DeskConfig) -> Router {
         )
         .route("/desk/api/b/{batch}/confirm", post(confirm))
         .route("/desk/api/b/{batch}/decline", post(decline))
+        .route("/desk/api/b/{batch}/submit", post(submit))
+        .route("/desk/api/b/{batch}/approve", post(approve))
+        .route("/desk/api/b/{batch}/return", post(return_items))
+        .route("/desk/api/b/{batch}/supplement", post(supplement))
         .layer(middleware::from_fn_with_state(desk.clone(), host_guard))
         .layer(middleware::from_fn_with_state(desk.clone(), access_log))
         .with_state(desk)
@@ -289,6 +293,29 @@ async fn state(
         Err(err) => return service_error(err),
     };
     let assessment = desk.service.assessment(&batch).ok().flatten();
+    let finance = desk
+        .service
+        .with_store(|store| store.document(&batch, "reading"))
+        .ok()
+        .flatten()
+        .and_then(|r| r["finance"].as_array().cloned())
+        .unwrap_or_default();
+    let role = if user == batch_row.applicant {
+        "applicant"
+    } else if finance
+        .iter()
+        .any(|member| member.as_str() == Some(user.as_str()))
+    {
+        "finance"
+    } else {
+        "viewer"
+    };
+    let returned = desk.service.returned(&batch).ok().flatten();
+    let supplements = desk
+        .service
+        .with_store(|store| store.document(&batch, "supplements"))
+        .ok()
+        .flatten();
     let reading = desk
         .service
         .with_store(|store| store.document(&batch, "reading"))
@@ -341,7 +368,7 @@ async fn state(
         )
     });
     Json(json!({
-        "paired": true, "user": user, "role": if user == batch_row.applicant { "applicant" } else { "viewer" },
+        "paired": true, "user": user, "role": role,
         "csrf": session.csrf,
         "batch": {"id": batch_row.id, "state": batch_row.state.as_str(), "label": batch_row.state.label(), "revision": batch_row.revision},
         "report": assessment.as_ref().map(|a| json!({"text": a.report.text, "items": a.report.items,
@@ -350,6 +377,8 @@ async fn state(
         "visual_checks": candidates,
         "screenshots": screenshots,
         "published": published,
+        "returned": returned,
+        "supplements": supplements,
     }))
     .into_response()
 }
@@ -637,4 +666,98 @@ async fn decline(
             .decline(&batch, &user, body.expected_revision)
             .await,
     )
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReturnItems {
+    expected_revision: i64,
+    items: Map<String, Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Supplement {
+    expected_revision: i64,
+    item_id: String,
+    people: i64,
+    purpose: String,
+}
+
+async fn submit(
+    State(desk): State<Desk>,
+    Path(batch): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<Revision>,
+) -> Response {
+    let user = match writer(&desk, &headers, &batch) {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    done(
+        desk.service
+            .submit(&batch, &user, body.expected_revision)
+            .await,
+    )
+}
+
+async fn approve(
+    State(desk): State<Desk>,
+    Path(batch): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<Revision>,
+) -> Response {
+    let user = match writer(&desk, &headers, &batch) {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    done(
+        desk.service
+            .approve(&batch, &user, body.expected_revision)
+            .await,
+    )
+}
+
+async fn return_items(
+    State(desk): State<Desk>,
+    Path(batch): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<ReturnItems>,
+) -> Response {
+    let user = match writer(&desk, &headers, &batch) {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    done(
+        desk.service
+            .return_items(&batch, &user, body.expected_revision, &body.items)
+            .await,
+    )
+}
+
+async fn supplement(
+    State(desk): State<Desk>,
+    Path(batch): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<Supplement>,
+) -> Response {
+    let user = match writer(&desk, &headers, &batch) {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    match desk
+        .service
+        .supplement(
+            &batch,
+            &user,
+            body.expected_revision,
+            &body.item_id,
+            body.people,
+            &body.purpose,
+        )
+        .await
+    {
+        Ok(text) => Json(json!({"ok": true, "text": text})).into_response(),
+        Err(err) => service_error(err),
+    }
 }

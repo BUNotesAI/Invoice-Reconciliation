@@ -392,7 +392,7 @@ async fn finance_views_but_cannot_change_and_strangers_see_nothing() {
         .await;
     assert_eq!(
         (status, state["role"].clone()),
-        (StatusCode::OK, json!("viewer"))
+        (StatusCode::OK, json!("finance"))
     );
     let item = item_id(&desk.service, &desk.batch, "F08.pdf");
     let body = json!({"expected_revision": finance.revision, "item_id": item, "kind": "explain_over_limit", "payload": {"explanation": "x"}});
@@ -857,4 +857,66 @@ fn urlencode(text: &str) -> String {
             }
         })
         .collect()
+}
+
+#[tokio::test]
+async fn finance_round_trip_through_the_desk() {
+    let desk = desk().await;
+    // Applicant finishes and publishes through the service; the round trip below goes through HTTP.
+    common::decide_everything(&desk.service, &desk.batch).await;
+    let revision = desk.service.batch(&desk.batch).unwrap().revision;
+    desk.service
+        .confirm(&desk.batch, LINYI, revision)
+        .await
+        .unwrap();
+    let mut applicant = paired(&desk, LINYI, "$pair-a").await;
+    assert_eq!(
+        applicant
+            .post(
+                &desk.batch,
+                "submit",
+                json!({"expected_revision": applicant.revision})
+            )
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let mut finance = paired(&desk, ZHOUMIN, "$pair-f").await;
+    let (_, state) = finance.state(&desk.batch).await;
+    assert_eq!(
+        (state["role"].clone(), state["batch"]["state"].clone()),
+        (json!("finance"), json!("submitted"))
+    );
+    // Roles hold over HTTP too: the applicant cannot approve, finance cannot supplement.
+    applicant.state(&desk.batch).await;
+    assert_eq!(
+        applicant
+            .post(
+                &desk.batch,
+                "approve",
+                json!({"expected_revision": applicant.revision})
+            )
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    let f08 = item_id(&desk.service, &desk.batch, "F08.pdf");
+    let (status, _) = finance
+        .post(
+            &desk.batch,
+            "return",
+            json!({"expected_revision": finance.revision, "items": {f08.clone(): "请补充事由"}}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, state) = applicant.state(&desk.batch).await;
+    assert_eq!(state["returned"][&f08], "请补充事由");
+    assert_eq!(finance.post(&desk.batch, "supplement", json!({"expected_revision": state["batch"]["revision"], "item_id": f08.clone(), "people": 3, "purpose": "会展"})).await.0, StatusCode::FORBIDDEN);
+    let (status, body) = applicant.post(&desk.batch, "supplement", json!({"expected_revision": applicant.revision, "item_id": f08, "people": 3, "purpose": "客户会展接待"})).await;
+    assert_eq!(
+        (status, body["text"].clone()),
+        (StatusCode::OK, json!("客户会展接待，3 人"))
+    );
+    let (_, state) = applicant.state(&desk.batch).await;
+    assert_eq!(state["batch"]["state"], "awaiting_confirm");
 }

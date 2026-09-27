@@ -3,60 +3,15 @@ mod common;
 
 use std::sync::atomic::Ordering;
 
-use common::{Harness, INTRUDER, LINYI, ROOM, ZHOUMIN, item_id, repo, texts, to_needs_decision};
+use common::{
+    Harness, INTRUDER, LINYI, ROOM, ZHOUMIN, decide_everything, item_id, repo, texts,
+    to_needs_decision,
+};
 use reimb_bot::{
     service::{Service, ServiceError, Stage},
     store::State,
 };
 use serde_json::{Map, Value, json};
-
-/// Decisions a careful applicant makes for F06, F08, F09 and F10, all bound to the current revision.
-async fn decide_everything(service: &Service, batch: &str) {
-    let rev = |service: &Service| service.batch(batch).unwrap().revision;
-    let f09 = item_id(service, batch, "F09.pdf");
-    service
-        .confirm_visual(batch, LINYI, rev(service), &f09, &Map::new())
-        .await
-        .unwrap();
-    let reading = service
-        .with_store(|store| store.document(batch, "reading"))
-        .unwrap()
-        .unwrap();
-    let shot = reading["screenshots"][0]["source_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    service
-        .confirm_screenshot(batch, LINYI, rev(service), &shot, &Map::new())
-        .await
-        .unwrap();
-    for file in ["F08.pdf", "F09.pdf"] {
-        let id = item_id(service, batch, file);
-        service
-            .decide(
-                batch,
-                LINYI,
-                rev(service),
-                &id,
-                "explain_over_limit",
-                json!({"explanation": "客户接待与会展期间"}),
-            )
-            .await
-            .unwrap();
-    }
-    let f10 = item_id(service, batch, "F10.pdf");
-    service
-        .decide(
-            batch,
-            LINYI,
-            rev(service),
-            &f10,
-            "replace_unpaid_invoice",
-            json!({"invoice_no": "26112000000300002208"}),
-        )
-        .await
-        .unwrap();
-}
 
 #[tokio::test]
 async fn month_end_reminder_is_sent_once() {

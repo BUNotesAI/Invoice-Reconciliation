@@ -31,6 +31,8 @@ struct Config {
     /// `replay:<dir>`, `octos:<data dir>` or `none`.
     agent: String,
     applicants: BTreeMap<String, String>,
+    #[serde(default)]
+    finance_rooms: BTreeMap<String, String>,
 }
 
 async fn agent(spec: &str) -> Result<AgentPort> {
@@ -81,6 +83,7 @@ async fn run() -> Result<()> {
             period: config.period.clone(),
             desk_url: config.desk_origin.clone(),
             applicants: config.applicants.clone(),
+            finance_rooms: config.finance_rooms.clone(),
         },
         store,
         agent(&config.agent).await?,
