@@ -1,11 +1,11 @@
 //! The report card. Every fact sentence is a code template; agent text appears only as a labelled note.
 use std::collections::BTreeMap;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::reconcile::{Bucket, MissingRow};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ItemView {
     pub item_id: String,
     pub file: String,
@@ -36,7 +36,7 @@ pub struct Input {
     pub unsupported: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Report {
     pub period: String,
     pub applicant: String,
@@ -77,6 +77,15 @@ pub fn reason_text(code: &str) -> &'static str {
         "CATEGORY_UNKNOWN" | "CATEGORY_CONFLICT" => "报销类别需要你确认",
         _ => "需要人工确认",
     }
+}
+
+/// Text for HTML contexts (Matrix formatted_body, desk pages): escapes the five significant characters.
+pub fn escape_html(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }
 
 pub fn yuan(cents: i64) -> String {

@@ -325,7 +325,8 @@ def render(plans, tentative, policy):
     return {"links": links, "occupancy": {"claims": sorted(occupancy, key=lambda e: (e["evidence_id"], e["item_id"])),
                                           "travel_dates": travel},
             "summary": summary, "policy_hash": policy.sha(), "policy_categories": sorted(policy.categories),
-            "policy_limits": policy.limits.model_dump(), "policy_short_names": dict(policy.short_names)}
+            "policy_limits": policy.limits.model_dump(), "policy_short_names": dict(policy.short_names),
+            "policy_finance": list(policy.finance)}
 
 
 def stay_days(plan):

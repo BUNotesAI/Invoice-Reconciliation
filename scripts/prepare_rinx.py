@@ -44,17 +44,24 @@ def main():
             private_write(data / "latest_user_id.txt", account["user_id"])
         bundle = DATA / "apps" / f"Reimb {role}.app" / "Contents"
         (bundle / "MacOS").mkdir(parents=True, exist_ok=True)
+        executable = args.binary.name  # "rinx" since d77a647; P0 bundles used "robrix"
         info = {"CFBundleIdentifier": "local.reimb." + role.lower(), "CFBundleName": "Reimb " + role,
-                "CFBundleExecutable": "robrix", "CFBundlePackageType": "APPL", "CFBundleVersion": "1",
-                "LSEnvironment": {"ROBRIX_DATA_DIR": str(data), "NO_PROXY": "127.0.0.1,localhost",
+                "CFBundleExecutable": executable, "CFBundlePackageType": "APPL", "CFBundleVersion": "1",
+                "LSEnvironment": {"RINX_DATA_DIR": str(data), "NO_PROXY": "127.0.0.1,localhost",
                                   "no_proxy": "127.0.0.1,localhost"}}
-        (bundle / "Info.plist").write_bytes(plistlib.dumps(info))
-        binary = bundle / "MacOS" / "robrix"
-        if not binary.exists():
+        running = subprocess.run(["pgrep", "-f", str(bundle / "MacOS")], capture_output=True).returncode == 0
+        binary = bundle / "MacOS" / executable
+        current = binary.exists() and hashlib.sha256(binary.read_bytes()).hexdigest() == binary_hash
+        stale = [path for path in (bundle / "MacOS").iterdir() if path.name != executable]
+        if not current or stale:
+            # Only this project's own bundles are touched, and never while that app is running.
+            if running:
+                raise RuntimeError("Stop the app before replacing its bundle binary")
+            for path in stale:
+                path.unlink()
             shutil.copy2(args.binary, binary)
             binary.chmod(0o700)
-        elif hashlib.sha256(binary.read_bytes()).hexdigest() != binary_hash:
-            raise RuntimeError("Existing app binary differs; stop the app before replacing its bundle")
+        (bundle / "Info.plist").write_bytes(plistlib.dumps(info))
         print(json.dumps({"role": role, "app": str(bundle.parent), "rinx_commit": commit, "binary_sha256": binary_hash}))
 
 
