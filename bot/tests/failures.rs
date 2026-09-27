@@ -205,3 +205,77 @@ async fn a_correction_that_fails_the_format_check_changes_nothing() {
             .is_empty()
     );
 }
+
+#[tokio::test]
+async fn an_invoice_for_an_already_paid_expense_is_moved_out_not_stuck() {
+    // Final review A5: the old "receipt only" button recorded a decision the core never reads, so the item stayed
+    // waiting. Only `reject` is admitted, and it moves the item out.
+    let mut harness = Harness::new();
+    harness.history = repo().join("fixtures/edge/history.json");
+    let service = harness.service();
+    service
+        .receive_file(
+            LINYI,
+            ROOM,
+            "$e01",
+            "E01.pdf",
+            &std::fs::read(repo().join("fixtures/edge/E01.pdf")).unwrap(),
+        )
+        .await
+        .unwrap();
+    service
+        .receive_text(LINYI, ROOM, "$start", "开始对账")
+        .await
+        .unwrap();
+    let batch = service
+        .with_store(|store| store.open_batch_for(LINYI))
+        .unwrap()
+        .unwrap();
+    let item = common::item_id(&service, &batch.id, "E01.pdf");
+    let report = service.assessment(&batch.id).unwrap().unwrap().report;
+    let view = report.items.iter().find(|i| i.item_id == item).unwrap();
+    assert!(
+        view.reasons.iter().any(|r| r == "HISTORY_ALREADY_PAID"),
+        "{:?}",
+        view.reasons
+    );
+    let revision = service.batch(&batch.id).unwrap().revision;
+    let receipt = service
+        .decide(
+            &batch.id,
+            LINYI,
+            revision,
+            &item,
+            "receipt_only",
+            serde_json::json!({}),
+        )
+        .await;
+    assert!(
+        matches!(receipt, Err(reimb_bot::service::ServiceError::Invalid(_))),
+        "{receipt:?}"
+    );
+    service
+        .decide(
+            &batch.id,
+            LINYI,
+            revision,
+            &item,
+            "reject",
+            serde_json::json!({"reason": "原票已付款，只更换凭证"}),
+        )
+        .await
+        .unwrap();
+    // Moved out: nothing waits for a decision any more and the batch goes on.
+    let report = service.assessment(&batch.id).unwrap().unwrap().report;
+    assert!(
+        report
+            .items
+            .iter()
+            .all(|i| i.item_id != item || i.disposition != "needs_decision")
+    );
+    assert_eq!(report.needs_decision.count, 0);
+    assert_eq!(
+        service.batch(&batch.id).unwrap().state,
+        State::AwaitingConfirm
+    );
+}

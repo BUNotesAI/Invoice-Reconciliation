@@ -148,7 +148,7 @@ class Bot:
                 raise Failed(f"reimb-bot exited with {self.process.returncode}; see {self.log.name}")
             try:
                 HTTP.open(f"{ORIGIN}/health", timeout=2).read()
-                time.sleep(3)  # let the warm-up sync finish before the first message
+                time.sleep(3)  # margin for the first sync to start before the script writes
                 return
             except OSError:
                 time.sleep(0.5)
@@ -196,7 +196,7 @@ def run(steps, work):
         "homeserver": BASE, "bot_user": bot_user, "credentials": str(DATA / "credentials.json"),
         "credentials_account": "reimb-bot", "data_root": str(work / "data"), "policy": str(policy),
         "python": str(ROOT / ".venv/bin/python"), "core_dir": str(ROOT / "core"),
-        "history": str(DEMO / "history.json"), "period": "2026-10", "desk_bind": f"127.0.0.1:{DESK_PORT}",
+        "history": str(DEMO / "history.json"), "desk_bind": f"127.0.0.1:{DESK_PORT}",
         "desk_origin": ORIGIN, "agent": "replay:" + str(ROOT / "fixtures/agent-replay/demo"),
         "applicants": {linyi.user: linyi.room}, "finance_rooms": {zhoumin.user: zhoumin.room}, "clock_file": str(clock)})
     log = open(work / "bot.log", "ab")
@@ -337,7 +337,8 @@ def run(steps, work):
             linyi.file(CLAIM / "C03.pdf")
             linyi.wait(bot_user, since, "personal title refused", says("抬头不是公司"))
             linyi.file(CLAIM / "C04.pdf")
-            linyi.wait(bot_user, since, "京东 claimed", says("这是漏票 京东商城"))
+            # The clock is in November now: claimed invoices go into the next period's batch.
+            linyi.wait(bot_user, since, "京东 claimed into the next batch", says("这是漏票 京东商城 ¥459.00（2026-10-22） 的发票，已认领，归入下一批次（2026-11）"))
             linyi.file(CLAIM / "C01.pdf")
             linyi.wait(bot_user, since, "悦途 claimed", says("这是漏票 悦途酒店"))
             # Two days later the one-hour pairing has expired: the page asks for a new code, as it would for a person.

@@ -406,6 +406,8 @@ async fn invoices_sent_into_chat_are_claimed_or_refused_with_the_reason() {
         .await
         .unwrap();
     }
+    // The invoices arrive in November: they go into the next period's batch (design §8.3 归入下一批次).
+    harness.clock.store(MONTH_END + 2 * DAY, Ordering::SeqCst);
     let last_reply = |service: &Service| {
         let next = service
             .with_store(|store| store.open_batch_for(LINYI))
@@ -436,6 +438,7 @@ async fn invoices_sent_into_chat_are_claimed_or_refused_with_the_reason() {
         .with_store(|store| store.open_batch_for(LINYI))
         .unwrap()
         .unwrap();
+    assert_eq!(next.period, "2026-11");
     assert!(
         service
             .with_store(|store| store.files(&next.id))
@@ -449,7 +452,9 @@ async fn invoices_sent_into_chat_are_claimed_or_refused_with_the_reason() {
         .unwrap();
     let reply = last_reply(&service);
     assert!(
-        reply.contains("这是漏票 京东商城 ¥459.00（2026-10-22） 的发票，已认领"),
+        reply.contains(
+            "这是漏票 京东商城 ¥459.00（2026-10-22） 的发票，已认领，归入下一批次（2026-11）"
+        ),
         "{reply}"
     );
     service

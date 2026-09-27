@@ -295,25 +295,19 @@ impl Store {
     }
 
     /// The appended history ledger in order, optionally without one batch's own events (finding F6).
+    /// The ledger as the core may see it: events of other batches (or all, with `None`), without the bot-only
+    /// `withdrawn` markers and without any event of an invoice its batch withdrew before approval.
     pub fn history_events(&self, excluding: Option<&str>) -> rusqlite::Result<Vec<Value>> {
-        let mut statement = self
-            .connection
-            .prepare("SELECT body FROM history_events WHERE batch_id != ?1 ORDER BY seq")?;
+        let mut statement = self.connection.prepare(
+            "SELECT h.body FROM history_events h WHERE h.batch_id != ?1 AND h.status != 'withdrawn'
+               AND NOT EXISTS (SELECT 1 FROM history_events w WHERE w.status = 'withdrawn'
+                                 AND w.invoice_no = h.invoice_no AND w.batch_id = h.batch_id)
+             ORDER BY h.seq",
+        )?;
         statement
             .query_map([excluding.unwrap_or("")], |row| row.get::<_, String>(0))?
             .map(|r| r.map(|text| parse(&text)))
             .collect()
-    }
-
-    pub fn has_history_event(&self, invoice_no: &str, status: &str) -> rusqlite::Result<bool> {
-        self.connection
-            .query_row(
-                "SELECT 1 FROM history_events WHERE invoice_no = ?1 AND status = ?2",
-                params![invoice_no, status],
-                |_| Ok(()),
-            )
-            .optional()
-            .map(|found| found.is_some())
     }
 
     pub fn setting(&self, key: &str) -> rusqlite::Result<Option<String>> {
@@ -540,10 +534,13 @@ impl Work<'_> {
         Ok(())
     }
 
+    /// Whether the invoice already has this status in the ledger, not counting a batch that withdrew it.
     pub fn has_history_event(&self, invoice_no: &str, status: &str) -> rusqlite::Result<bool> {
         self.tx
             .query_row(
-                "SELECT 1 FROM history_events WHERE invoice_no = ?1 AND status = ?2",
+                "SELECT 1 FROM history_events h WHERE h.invoice_no = ?1 AND h.status = ?2
+                   AND NOT EXISTS (SELECT 1 FROM history_events w WHERE w.status = 'withdrawn'
+                                     AND w.invoice_no = h.invoice_no AND w.batch_id = h.batch_id)",
                 params![invoice_no, status],
                 |_| Ok(()),
             )

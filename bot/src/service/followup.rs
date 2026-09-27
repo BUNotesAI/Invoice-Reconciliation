@@ -420,8 +420,17 @@ impl Service {
                     &at,
                     json!({"invoice_no": invoice_no, "file": display}),
                 );
+                // 归入下一批次: the batch open now; its period is the next one unless the period is fixed.
+                let origin = spend["batch_id"]
+                    .as_str()
+                    .and_then(|id| self.batch(id).ok());
+                let place = if origin.is_some_and(|b| b.period != batch.period) {
+                    "下一批次"
+                } else {
+                    "本批次"
+                };
                 let text = format!(
-                    "收到「{display}」：这是漏票 {} 的发票，已认领，归入本批次（{}）。",
+                    "收到「{display}」：这是漏票 {} 的发票，已认领，归入{place}（{}）。",
                     label(&spend),
                     batch.period
                 );

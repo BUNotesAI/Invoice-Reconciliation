@@ -23,6 +23,8 @@ MAIL = "li.si" + "@" + "gmail.com"
     ("电话：" + PHONE_B + "。", "phone"),
     ("mail " + MAIL, "email"),
     ("票号 26442000000100010131", "invoice_number"),
+    ("预演报告 /Users/" + "somebody/codes/reports/x.html", "home_path"),
+    ("checkout /home/" + "dev/src/Rinx", "home_path"),
 ])
 def test_real_looking_values_are_found(text, rule):
     assert rule in pattern_violations(text.encode(), PLAIN)
@@ -37,6 +39,7 @@ def test_real_looking_values_are_found(text, rule):
     'hash = "sha256:a' + PHONE_A + 'b' + TAX[:-1] + '2c"',
     "url = https://files.pythonhosted.org/packages/5b/75/5b20dd1e6573a01a08158fe104104fa2c8abf941745596954185726cd46c/x.whl",
     "size = 12345678901",
+    "本机用户目录形如 /Users/<名>/ 或 /home/<名>/",
 ])
 def test_fictional_and_hash_values_pass(text):
     assert pattern_violations(text.encode(), PLAIN) == []

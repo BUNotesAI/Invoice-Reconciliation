@@ -28,6 +28,8 @@ TAX_ID = re.compile(EDGE_BEFORE + r"[0-9][0-9A-HJ-NPQRTUWXY]{17}" + EDGE_AFTER)
 PHONE = re.compile(EDGE_BEFORE + r"1[3-9][0-9]{9}" + EDGE_AFTER)
 EMAIL = re.compile(r"[A-Za-z0-9_.+%-]+@([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)")
 INVOICE_NUMBER = re.compile(EDGE_BEFORE + r"[0-9]{20}" + EDGE_AFTER)
+# A local home directory names the author's account and layout; placeholders such as /Users/<name>/ pass.
+HOME_PATH = re.compile(r"/(?:Users|home)/[A-Za-z0-9._-]+/")
 FICTIONAL_TAX_MARK = "XXXXXXXX"
 EMAIL_DOMAINS = ("example", "invalid", "reimb.local")
 # Fictional invoice numbers are allowed only where fixtures and tests live.
@@ -63,6 +65,8 @@ def pattern_violations(data, path):
             findings.append("email")
     if not INVOICE_NUMBER_DIRS & set(path.parts) and INVOICE_NUMBER.search(text):
         findings.append("invoice_number")
+    if HOME_PATH.search(text):
+        findings.append("home_path")
     return sorted(set(findings))
 
 

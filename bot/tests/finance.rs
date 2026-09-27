@@ -296,31 +296,67 @@ fn supplement_text_is_bounded() {
 }
 
 #[tokio::test]
-async fn reading_again_after_a_return_ignores_the_batch_own_submission() {
-    // Finding F6: re-reading the batch must not treat its own submitted invoices as history duplicates.
+async fn after_a_return_the_batch_cannot_be_read_again_and_still_completes() {
+    // Final review A1: re-reading after a return voided every decision while all but the returned item stayed
+    // frozen, so the batch could never be confirmed again. Reopening is refused; the return still completes.
     let harness = Harness::new();
     let (service, batch) = published(&harness).await;
-    let first = revision(&service, &batch);
-    service.submit(&batch, LINYI, first).await.unwrap();
-    let mut returned = Map::new();
-    returned.insert(item_id(&service, &batch, "F08.pdf"), json!("补充说明"));
     service
-        .return_items(&batch, ZHOUMIN, first, &returned)
+        .submit(&batch, LINYI, revision(&service, &batch))
         .await
         .unwrap();
+    let f08 = item_id(&service, &batch, "F08.pdf");
+    let mut returned = Map::new();
+    returned.insert(f08.clone(), json!("请补充住宿的事由和人数"));
+    service
+        .return_items(&batch, ZHOUMIN, revision(&service, &batch), &returned)
+        .await
+        .unwrap();
+    let before = service.batch(&batch).unwrap();
+    let decisions = service.with_store(|store| store.decisions(&batch)).unwrap();
     service
         .receive_text(LINYI, ROOM, "$reopen-after-return", "重开收件")
         .await
         .unwrap();
+    let after = service.batch(&batch).unwrap();
+    assert_eq!(
+        (after.state, after.revision),
+        (before.state, before.revision)
+    );
+    assert!(
+        posted_to(&service, &batch, ROOM)
+            .iter()
+            .any(|t| t.contains("财务退回后只能补充被退回的项"))
+    );
+    assert_eq!(
+        service.with_store(|store| store.decisions(&batch)).unwrap(),
+        decisions,
+        "nothing voided"
+    );
     service
-        .receive_text(LINYI, ROOM, "$restart-after-return", "开始对账")
+        .supplement(
+            &batch,
+            LINYI,
+            revision(&service, &batch),
+            &f08,
+            3,
+            "客户会展接待",
+        )
         .await
         .unwrap();
-    let report = service.assessment(&batch).unwrap().unwrap().report;
-    assert_eq!(
-        report.rejected.count, 2,
-        "only F11 and F12, never the batch's own ten invoices"
-    );
+    service
+        .confirm(&batch, LINYI, revision(&service, &batch))
+        .await
+        .unwrap();
+    service
+        .submit(&batch, LINYI, revision(&service, &batch))
+        .await
+        .unwrap();
+    service
+        .approve(&batch, ZHOUMIN, revision(&service, &batch))
+        .await
+        .unwrap();
+    assert_eq!(service.batch(&batch).unwrap().state, State::Approved);
 }
 
 #[tokio::test]
@@ -377,5 +413,106 @@ async fn confirming_after_a_return_refuses_a_changed_frozen_item() {
     assert_eq!(
         (after.state, after.revision),
         (State::AwaitingConfirm, before.revision)
+    );
+}
+
+#[tokio::test]
+async fn an_item_dropped_after_a_return_is_withdrawn_from_the_ledger() {
+    // Final review A6: a returned item the applicant then rejects must not stay "submitted" for ever, blocking a
+    // later, legitimate reimbursement of the same invoice.
+    let harness = Harness::new();
+    let (service, batch) = published(&harness).await;
+    service
+        .submit(&batch, LINYI, revision(&service, &batch))
+        .await
+        .unwrap();
+    let f08 = item_id(&service, &batch, "F08.pdf");
+    let f08_no = "26112000000400010091";
+    let mut returned = Map::new();
+    returned.insert(f08.clone(), json!("住宿说明不清"));
+    service
+        .return_items(&batch, ZHOUMIN, revision(&service, &batch), &returned)
+        .await
+        .unwrap();
+    service
+        .decide(
+            &batch,
+            LINYI,
+            revision(&service, &batch),
+            &f08,
+            "reject",
+            json!({"reason": "改到下个月报"}),
+        )
+        .await
+        .unwrap();
+    service
+        .confirm(&batch, LINYI, revision(&service, &batch))
+        .await
+        .unwrap();
+    service
+        .submit(&batch, LINYI, revision(&service, &batch))
+        .await
+        .unwrap();
+    service
+        .approve(&batch, ZHOUMIN, revision(&service, &batch))
+        .await
+        .unwrap();
+    // The ledger the core sees has nine invoices from this batch, none of them F08.
+    let ledger = service
+        .with_store(|store| store.history_events(None))
+        .unwrap();
+    assert!(
+        ledger.iter().all(|e| e["invoice_no"] != f08_no),
+        "{ledger:?}"
+    );
+    assert_eq!(
+        ledger.iter().filter(|e| e["status"] == "submitted").count(),
+        9
+    );
+    // Dropped from the approved batch, its payment is now a missing-invoice follow-up; sent again in chat, F08 is
+    // claimed for it and filed into a new batch, where it is not refused as a duplicate.
+    assert!(
+        service
+            .follow_ups(&batch)
+            .unwrap()
+            .iter()
+            .any(|f| f["merchant"] == "燕园会展酒店")
+    );
+    service
+        .receive_file(
+            LINYI,
+            ROOM,
+            "$f08-next",
+            "F08.pdf",
+            &std::fs::read(repo().join("fixtures/demo/F08.pdf")).unwrap(),
+        )
+        .await
+        .unwrap();
+    let claimed_into = service
+        .with_store(|store| store.open_batch_for(LINYI))
+        .unwrap()
+        .unwrap()
+        .id;
+    assert!(
+        posted_to(&service, &claimed_into, ROOM)
+            .iter()
+            .any(|t| t.contains("这是漏票 燕园会展酒店") && t.contains("已认领"))
+    );
+    service
+        .receive_text(LINYI, ROOM, "$next-start", "开始对账")
+        .await
+        .unwrap();
+    let next = service
+        .with_store(|store| store.open_batch_for(LINYI))
+        .unwrap()
+        .unwrap()
+        .id;
+    assert_ne!(next, batch);
+    let report = service.assessment(&next).unwrap().unwrap().report;
+    let view = report.items.iter().find(|i| i.file == "F08.pdf").unwrap();
+    assert!(
+        !view.reasons.iter().any(|r| r == "DUPLICATE_INVOICE"),
+        "{:?}",
+        view.reasons
     );
 }

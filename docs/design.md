@@ -5,7 +5,7 @@
 - 任务：task `47d65f86` · BUNOTES-298 · 分支 `task/bunotes-298-base-version`
 - 仓库：https://github.com/BUNotesAI/Invoice-Reconciliation （公开，Apache-2.0，引导提交 `78d65392c3ecdb3b1ab2860cdb8cc7ace5913589`）
 - 作者：外环（本项目外环主导设计与验收）；交叉评审：二环 ring2-codex-owner-base
-- 相关：预演报告 `/Users/alexwang/codes/reports/gosim-create/0927-01-reimburse-agent-preview.html`
+- 相关：预演报告（作者本机报告目录，不随仓库发布）
 
 ## 0. v0.1 → v1.0 变更摘要
 
@@ -123,7 +123,7 @@ flowchart LR
 | `fixtures/` | Python 生成脚本 + 手写 expected | 演示样例 12 张 + 边界样例集 | 真实数据 |
 | `policy/` | YAML | 政策配置 | 真实公司信息 |
 
-语言取舍保持：核心移植 `sz-upstream-invoice` 的逻辑（只移植逻辑，不复制公司名、税号、人名、模板路径；交接清单模板由代码生成）；服务端 Rust。若 P0 实测 Rust bot 最小收发或 octos 适配受阻，二环提交具体瓶颈与替代方案，由外环裁定。
+语言取舍保持：核心移植作者既有报销规则的逻辑（只移植逻辑，不复制公司名、税号、人名、模板路径；交接清单模板由代码生成）；服务端 Rust。若 P0 实测 Rust bot 最小收发或 octos 适配受阻，二环提交具体瓶颈与替代方案，由外环裁定。
 
 ### 3.2 进程与部署（本机演示）
 
@@ -131,7 +131,7 @@ flowchart LR
 - Matrix 测试服务器：Palpo，本机 Docker，参考 Rinx 仓 `tools/wechat-ux/live/provision_palpo.py`；房间不加密。脚本只创建本项目资源（容器名、账号、房间都带 `reimb-` 前缀），不删除或修改已有容器与账号。
 - `reimb-bot`：单进程，内含 bot、编排器、对账台 HTTP（`127.0.0.1:8787`）；调用核心 `python -m reimb_core <cmd>`。
 - octos：REST（`octos serve`）或 `octos serve --stdio`（AppUI JSON-RPC）二选一，P0 冒烟后定；令牌只放环境变量。
-- Rinx：两个实例，`RINX_DATA_DIR` 分开。checkout 放 `/Users/alexwang/codes/ai-agent-workspace/my-applications/Rinx`。
+- Rinx：两个实例，`RINX_DATA_DIR` 分开。checkout 放在本项目之外的外部目录（见 `docs/run.md`「准备 Rinx」）。
 - 数据目录 `$REIMB_DATA`（默认 `~/.reimb-demo`），不进仓库。
 
 ### 3.3 仓库结构（仓库根目录）

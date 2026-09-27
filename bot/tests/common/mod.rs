@@ -95,6 +95,8 @@ pub const MONTH_END: i64 = 1_793_408_400;
 
 pub struct Harness {
     pub _dir: tempfile::TempDir,
+    /// Reimbursement history the service starts from (the demo history unless a test swaps it).
+    pub history: PathBuf,
     pub root: PathBuf,
     pub clock: Arc<AtomicI64>,
 }
@@ -109,6 +111,7 @@ impl Harness {
             _dir: dir,
             root,
             clock: Arc::new(AtomicI64::new(MONTH_END)),
+            history: repo().join("fixtures/demo/history.json"),
         }
     }
 
@@ -128,11 +131,9 @@ impl Harness {
             policy: self.root.join("policy.yaml"),
             python,
             core_dir: repo().join("core"),
-            history: serde_json::from_slice(
-                &std::fs::read(repo().join("fixtures/demo/history.json")).unwrap(),
-            )
-            .unwrap(),
-            period: "2026-10".into(),
+            history: serde_json::from_slice(&std::fs::read(&self.history).unwrap()).unwrap(),
+            // Clock-driven: the harness clock starts on 2026-10-31.
+            period: None,
             desk_url: "http://127.0.0.1:8787".into(),
             applicants: BTreeMap::from([
                 (LINYI.to_string(), ROOM.to_string()),

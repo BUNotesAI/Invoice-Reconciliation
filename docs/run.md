@@ -20,7 +20,7 @@ python3 scripts/e2e.py
 | 8–9 | 视觉核对、截图证据、三项判断 | `demo.json` 的决定 |
 | 10–11 | 旧 revision 确认被拒；确认新简称；打包、终审 7/7、发布、下载交接清单 | `demo.json` 的简称、文件名、合计、清单名 |
 | 12–14 | 提交财务、周敏用自己的账号配对、退回 F08、补充说明、重建、重新提交、通过 | — |
-| 15 | 漏票跟进：开票信息、周一提醒（时钟拨到 2026-11-02 09:00）、个人抬头被拒、换开票与酒店票认领 | `claim.json` |
+| 15 | 漏票跟进：开票信息、周一提醒（时钟拨到 2026-11-02 09:00）、个人抬头被拒、换开票与酒店票认领并归入下一期间（2026-11）的批次 | `claim.json` |
 | 17 | 同一文件再发、错码超限、过期页面操作被拒、停机期间发的消息在重启后被处理、每条结果回帖恰好一次 | — |
 
 每步打印 `ok` 或失败原因，最后一行是 JSON 摘要；逐项检查写在 `$REIMB_DATA/e2e/<时间>/result.json`，bot 日志在同目录 `bot.log`。退出码 0 表示全部通过。本机已有别的 `reimb-bot` 在跑时脚本拒绝启动（它会抢答同一批房间），请先停掉 `scripts/dev.py`。
@@ -137,12 +137,11 @@ python3 scripts/prepare_rinx.py --checkout /absolute/Rinx --binary /absolute/car
 证据输出路径放源码之外：
 
 ```sh
-python3 scripts/matrix_smoke.py --out /absolute/reports/matrix-smoke.json
 python3 scripts/octos_smoke.py --out /absolute/reports/octos-text.json
 python3 scripts/octos_smoke.py --image fixtures/smoke/receipt.png --out /absolute/reports/octos-image.json
 ```
 
-`matrix_smoke.py` 是 P0 探路时对回声 bot 的冒烟（向测试房间发 `P0 echo`）；现在的 bot 不再回声，这条命令已被 `scripts/e2e.py` 取代，保留仅作 P0 证据的复现记录。octos 冒烟使用本机 `octos` 档的模型配置与凭据，复制到项目私有数据目录；移除 channels/MCP/hooks，工具策略 `deny:["*"]`，不改原档。调用 stdio JSON-RPC，60 秒回合上限；严格 JSON 不合法时修一次。图片只使用本仓固定虚构收据，手写期望为 DEMO CAFE、38600 分。
+P0 的 Matrix 回声冒烟脚本已删除（当前 bot 不再回声），端到端验证用 `scripts/e2e.py`。octos 冒烟使用本机 `octos` 档的模型配置与凭据，复制到项目私有数据目录；移除 channels/MCP/hooks，工具策略 `deny:["*"]`，不改原档。调用 stdio JSON-RPC，60 秒回合上限；严格 JSON 不合法时修一次。图片只使用本仓固定虚构收据，手写期望为 DEMO CAFE、38600 分。
 
 补充检查：
 

@@ -287,7 +287,7 @@ async fn script_over_real_matrix() {
                 &std::fs::read(repo().join("fixtures/demo/history.json")).unwrap(),
             )
             .unwrap(),
-            period: "2026-10".into(),
+            period: Some("2026-10".into()),
             desk_url: origin.clone(),
             applicants: BTreeMap::from([(linyi_id.clone(), linyi.room.clone())]),
             finance_rooms: BTreeMap::from([(zhoumin_id.clone(), zhoumin.room.clone())]),

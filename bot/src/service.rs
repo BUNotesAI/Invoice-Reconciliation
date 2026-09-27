@@ -31,7 +31,8 @@ pub struct ServiceConfig {
     pub python: PathBuf,
     pub core_dir: PathBuf,
     pub history: Value,
-    pub period: String,
+    /// Fixed reporting period for every batch (demos on a fixed month); `None`: the business month of the clock.
+    pub period: Option<String>,
     pub desk_url: String,
     /// Applicants allowed to open batches, with the direct room the bot uses for reminders.
     pub applicants: BTreeMap<String, String>,
@@ -299,7 +300,7 @@ impl Service {
             id: format!("b{}", random_hex(8)),
             applicant: sender.to_string(),
             room_id: room.to_string(),
-            period: self.config.period.clone(),
+            period: self.period_now(),
             state: State::Standby,
             revision: 0,
             snapshot_hash: None,
@@ -314,6 +315,15 @@ impl Service {
             work.commit()
         })?;
         Ok(batch)
+    }
+
+    /// The period a new batch reports: the configured one, else the Asia/Shanghai calendar month of the clock.
+    pub fn period_now(&self) -> String {
+        if let Some(period) = &self.config.period {
+            return period.clone();
+        }
+        let (year, month, _) = civil((self.now() + BUSINESS_OFFSET_SECONDS).div_euclid(86_400));
+        format!("{year:04}-{month:02}")
     }
 
     fn allowed_applicant(&self, sender: &str) -> bool {
@@ -682,6 +692,18 @@ impl Service {
                     "本批次当前是「{}」，不能重开收件。",
                     batch.state.label()
                 ))],
+            );
+        }
+        // After a finance return only the returned items may change (design §8.2); reading the batch again would
+        // void every decision while the rest stays frozen, a dead end.
+        if self.returned(&batch.id)?.is_some() {
+            return self.reply(
+                &batch.id,
+                room,
+                event_id,
+                &[notice(
+                    "财务退回后只能补充被退回的项：请在对账台补充说明后重新确认。要改其他内容，请联系财务。",
+                )],
             );
         }
         let now = self.now();
@@ -1101,12 +1123,13 @@ impl Service {
             )
             .await?
         };
-        let to =
-            if assessment.report.needs_decision.count > 0 || self.pending_returns(&batch.id)? > 0 {
-                State::NeedsDecision
-            } else {
-                State::AwaitingConfirm
-            };
+        let to = if assessment.report.needs_decision.count > 0
+            || self.pending_returns_in(&batch.id, reading)? > 0
+        {
+            State::NeedsDecision
+        } else {
+            State::AwaitingConfirm
+        };
         let now = self.now();
         let finished = to == State::AwaitingConfirm && batch.state == State::NeedsDecision;
         self.with_store(|store| -> rusqlite::Result<()> {
@@ -1657,13 +1680,26 @@ impl Service {
     }
 
     pub fn pending_returns(&self, batch: &str) -> Result<usize, ServiceError> {
+        let reading = self.reading(batch)?;
+        self.pending_returns_in(batch, &reading)
+    }
+
+    /// Returned items still waiting for a supplement, judged on `reading` (which may not be stored yet).
+    fn pending_returns_in(&self, batch: &str, reading: &Reading) -> Result<usize, ServiceError> {
         let Some(returned) = self.returned(batch)? else {
             return Ok(0);
         };
         let supplements = self.document_map(batch, "supplements")?;
+        // A returned item the applicant removed from the batch needs no supplement.
+        let rejected: BTreeSet<&str> = reading
+            .items
+            .iter()
+            .filter(|item| item.rejected)
+            .map(|item| item.id.as_str())
+            .collect();
         Ok(returned
             .keys()
-            .filter(|id| !supplements.contains_key(*id))
+            .filter(|id| !supplements.contains_key(*id) && !rejected.contains(id.as_str()))
             .count())
     }
 
@@ -1738,8 +1774,43 @@ impl Service {
         let count = events.len();
         let name = applicant_name(&batch.applicant);
         let card = desk_card(&self.config.desk_url, batch_id);
+        // Invoices the previous submission had and this one dropped (e.g. rejected after a return) are withdrawn,
+        // so their submission neither stays open nor blocks a later, legitimate reimbursement of that invoice.
+        let kept: BTreeSet<&str> =
+            snapshot["items"]
+                .as_array()
+                .map_or_else(BTreeSet::new, |items| {
+                    items
+                        .iter()
+                        .filter_map(|i| i["invoice"]["invoice_no"]["value"].as_str())
+                        .collect()
+                });
+        let withdrawn: Vec<Value> = self
+            .with_store(|store| store.document(batch_id, "submitted_snapshot"))?
+            .and_then(|previous| previous["items"].as_array().cloned())
+            .unwrap_or_default()
+            .iter()
+            .filter(|item| {
+                item["invoice"]["invoice_no"]["value"]
+                    .as_str()
+                    .is_some_and(|no| !kept.contains(no))
+            })
+            .map(|item| {
+                Self::history_event(
+                    &item["invoice"],
+                    "withdrawn",
+                    user,
+                    &at,
+                    "申请人撤回（退回后移出本批）",
+                    None,
+                )
+            })
+            .collect();
         self.with_store(|store| -> rusqlite::Result<()> {
             let work = store.begin()?;
+            for event in &withdrawn {
+                work.add_history_event(batch_id, event)?;
+            }
             for event in &events {
                 // An invoice resubmitted after a return keeps its first submission; the ledger never repeats it.
                 if !store_has(&work, event)? {
@@ -2142,7 +2213,7 @@ fn allowed_kind(kind: &str, reasons: &[String], disposition: &str) -> Result<(),
         match reason {
             "OVER_LIMIT" => &["explain_over_limit"],
             "REPLACEMENT_REQUIRES_DECISION" => &["replace_unpaid_invoice"],
-            "HISTORY_ALREADY_PAID" => &["receipt_only"],
+            // Already paid: only `reject` (always admitted) moves it on; the core never reads a receipt-only decision.
             "EVIDENCE_MISSING"
             | "DATE_CONFLICT"
             | "SERVICE_DATE_MISSING"

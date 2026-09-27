@@ -15,7 +15,8 @@ def claims(tmp_path_factory):
     history = runtime.ok("history", {"action": "validate_import",
                                      "entries": json.loads((FIXTURES / "demo" / "history.json").read_text())})
     invoices = {}
-    for path in [FIXTURES / "claim" / f"C0{n}.pdf" for n in range(1, 5)] + [FIXTURES / "demo" / "F01.pdf"]:
+    for path in [FIXTURES / "claim" / f"C0{n}.pdf" for n in range(1, 5)] + [FIXTURES / "demo" / "F01.pdf",
+                                                                        FIXTURES / "demo" / "F08.pdf"]:
         source = runtime.ingest(runtime.upload(path))
         invoices[path.stem] = runtime.ok("extract", {"source_file_id": source["id"]})["invoice"]
     return runtime, history["validated_snapshot"], invoices
@@ -80,3 +81,15 @@ def test_claim_input_is_closed(claims):
                             "actor": "someone"}, "INVALID_SCHEMA", 2)
     runtime.fails("claim", {"missing_spends": [{"id": "x"}], "history_snapshot": history, "invoice": invoices["C01"]},
                   "INVALID_SCHEMA", 2)
+
+
+def test_a_stay_matches_a_payment_made_at_checkout(claims):
+    # F08: 燕园会展酒店, check-in 2026-10-06, check-out 2026-10-09; paid at checkout on 10-09.
+    runtime, history, invoices = claims
+    spend = {"id": "missing-yanyuan", "payment_evidence_id": "ev-yanyuan", "merchant": "燕园会展酒店",
+             "amount_cents": 156000, "payment_date": "2026-10-09", "status": "waiting", "deadline": "2026-11-30"}
+    result = claim(runtime, history, invoices["F08"], [spend])
+    assert (result["result"], result["missing_id"]) == ("match", "missing-yanyuan")
+    for outside in ("2026-10-04", "2026-10-11"):
+        result = claim(runtime, history, invoices["F08"], [dict(spend, payment_date=outside)])
+        assert (result["result"], result["reason"]) == ("rejected", "DATE_CONFLICT"), outside

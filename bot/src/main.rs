@@ -25,7 +25,9 @@ struct Config {
     python: PathBuf,
     core_dir: PathBuf,
     history: PathBuf,
-    period: String,
+    /// Optional fixed period; absent: the business month of the clock.
+    #[serde(default)]
+    period: Option<String>,
     desk_bind: String,
     desk_origin: String,
     /// `replay:<dir>`, `octos:<data dir>` or `none`.

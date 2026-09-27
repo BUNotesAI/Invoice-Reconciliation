@@ -151,9 +151,10 @@ function itemCard(item, state, applicant) {
       () => post("decide", { item_id: item.item_id, kind: "replace_unpaid_invoice", payload: { invoice_no: original } })));
   }
   if (reasons.has("HISTORY_ALREADY_PAID")) {
-    const original = (state.report.replacements[item.item_id] || [])[0];
-    if (original) card.append(button("只更换凭证，不报销",
-      () => post("decide", { item_id: item.item_id, kind: "receipt_only", payload: { replaces_invoice_no: original } })));
+    // The original was already paid: this invoice adds no reimbursement. Swapping the voucher is done with finance.
+    card.append(el("div", "原票已付款，这张不能再报销；只是更换凭证的，请线下交给财务。", "muted"),
+      button("不报销（移出本批）", () => post("decide", { item_id: item.item_id, kind: "reject",
+        payload: { reason: "原票已付款，只更换凭证" } })));
   }
   if (reasons.has("EVIDENCE_MISSING")) {
     for (const shot of state.screenshots) card.append(fieldForm(shot.source_id, shot.fields, `核对截图「${shot.file}」的读数`,

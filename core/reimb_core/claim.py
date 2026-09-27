@@ -37,6 +37,11 @@ def service_date(invoice):
 
 def date_fits(invoice, spend):
     paid = date.fromisoformat(spend["payment_date"])
+    if invoice.service_period is not None:
+        # A stay is paid on arrival, at checkout or in between.
+        start = date.fromisoformat(invoice.service_period.check_in.value)
+        end = date.fromisoformat(invoice.service_period.check_out.value)
+        return (start - paid).days <= 1 and (paid - end).days <= 1
     served = service_date(invoice)
     if served is not None:
         return abs((date.fromisoformat(served) - paid).days) <= 1
