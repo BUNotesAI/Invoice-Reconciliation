@@ -1,0 +1,6 @@
+{
+  "key": "87bc574d150b1df695958caf3207f599f667c05302ffe8082d974237b59def58",
+  "task": "read_invoice",
+  "response": "{\"invoice_no\":\"26442000000500010191\",\"issue_date\":\"2026-10-19\",\"amount_cents\":\"386.00\",\"amount_upper\":\"叁佰捌拾陆圆整\",\"buyer_name\":\"示例科技有限公司\",\"buyer_tax_id\":\"91440300XXXXXXXX0A\",\"seller_name\":\"深圳潮海居酒楼有限公司\",\"project\":\"*餐饮服务*餐费\",\"remark\":\"\",\"order_ref\":\"\"}",
+  "note": "recorded from a real octos turn"
+}

@@ -176,7 +176,7 @@ def test_invalid_envelopes_keep_request_id(runtime, changes, code):
 
 
 def test_unknown_and_later_phase_commands(runtime):
-    status, response = runtime.call("link", None, raw=envelope(runtime, command="link"), argv=["link"])
+    status, response = runtime.call("claim", None, raw=envelope(runtime, command="claim"), argv=["claim"])
     assert (status, response["error"]["code"]) == (2, "UNKNOWN_COMMAND")
     status, response = runtime.call("drop", None, raw=envelope(runtime, command="drop"), argv=["drop"])
     assert (status, response["error"]["code"]) == (2, "UNKNOWN_COMMAND")

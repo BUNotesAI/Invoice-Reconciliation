@@ -81,6 +81,21 @@ GUARDS = {
     "storage_single_link": ("storage.py", "and status.st_nlink == 1", ""),
     "storage_form_images": ("storage.py", "            _resource_images(xobject.get(\"/Resources\"), reader, seen, depth + 1)", "            pass"),
     "storage_inline_images": ("storage.py", "            _pixels(settings.get(\"/W\"", "            (settings.get(\"/W\""),
+    # P2: linking, refunds, limits and missing-invoice detection.
+    "link_unusable_evidence": ("link.py", "if evidence.kind == \"trip\" or not evidence.usable() or", "if evidence.kind == \"trip\" or"),
+    "link_coincidence": ("link.py", "(genuine if merchant_ok and is_purchase else coincidences)", "(genuine if True else coincidences)"),
+    "link_category_conflict": ("link.py", '                plan["reasons"].append("CATEGORY_CONFLICT")', "                pass"),
+    "link_candidate_reserved": ("link.py", '            plan["reasons"].append("FACT_UNCONFIRMED")', "            pass"),
+    "link_date_conflict": ("link.py", "elif len(days) > 1:", "elif False:"),
+    "link_window": ("link.py", '            plan["reasons"].append("OUT_OF_WINDOW")', "            pass"),
+    "link_contested": ("link.py", "contested = {evidence_id for evidence_id, owners in claims.items() if len(owners) > 1}", "contested = set()"),
+    "link_full_refund": ("link.py", 'if payment.payment_status == "full_refund":', "if False:"),
+    "link_partial_refund": ("link.py", 'elif payment.payment_status == "partial_refund":', "elif False:"),
+    "link_daily_limit": ("link.py", 'if sum_cents(plan["item"].invoice.amount_cents.value for plan in group) > limit:', "if False:"),
+    "missing_taken": ("missing.py", ' or payment.id in taken):', "):"),
+    "missing_ignored_transaction": ("missing.py", "if payment.transaction_ref in ignored:", "if False:"),
+    "missing_ignored_merchant": ("missing.py", "if any(name in payment.merchant for name in policy.ignore_merchants):", "if False:"),
+    "evidence_trip_total": ("evidence.py", "require(int(total[1]) == len(result)", "require(True or int(total[1]) == len(result)"),
 }
 
 # Mutants no test can tell apart from the original, each with the reason.

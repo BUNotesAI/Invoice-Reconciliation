@@ -1,0 +1,6 @@
+{
+  "key": "6463c461a0fcef408ca1f1a95894407dac2695fd23f008a1cf5e4ec7300b70df",
+  "task": "classify",
+  "response": "{\"category\":\"机票\",\"short_name\":\"中国国航\",\"rationale\":\"航空旅客运输服务由航空公司提供，归属机票类别。\"}",
+  "note": "recorded from a real octos turn"
+}

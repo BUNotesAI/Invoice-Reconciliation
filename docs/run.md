@@ -1,6 +1,6 @@
 # 本机启动与验证
 
-当前实现：P0 连接探路（独立 Palpo、测试账号、Rust Matrix bot、静态连接页、octos 文字/图像探测）与 P1 确定性核心（收件、读票、门禁、历史、打包、终审）。关联、Agent、授权配对与聊天流程尚未实现，不能用于真实报销。
+当前实现：P0 连接探路（独立 Palpo、测试账号、Rust Matrix bot、静态连接页、octos 文字/图像探测）、P1 确定性核心（收件、读票、门禁、历史、打包、终审），以及 P2 关联与 Agent 层（证据、关联与占用、退款、日限额、漏票、AgentPort 与校验、命令行对账）。授权配对与聊天流程尚未实现，不能用于真实报销。
 
 ## P1 确定性核心
 
@@ -19,7 +19,24 @@ uv run python scripts/check_public.py      # 公开仓库扫描
 PYTHONPATH=core REIMB_DATA=/absolute/private/root uv run python -m reimb_core ingest < request.json
 ```
 
-信封、命令与错误码见 `docs/spec/README.md`，P1 的细化见 `docs/spec/p1-core.md`。样例生成依赖 macOS 上 pdfium 对 STSong-Light 的字体替换来渲染 F09 与 F06 截图；其他平台生成的图片字节可能不同。
+信封、命令与错误码见 `docs/spec/README.md`，P1 的细化见 `docs/spec/p1-core.md`，设计勘误见 `docs/design-amendments.md`。
+
+## P2 命令行对账
+
+`reimb-reconcile` 跑一遍完整的第一轮对账：收件 → 读票（A1）→ 门禁 → 分类建议（A3）→ 证据 → 关联（多候选时 A2）→ 漏票 → 解释（A4）→ 报告卡 JSON。所有路径须为绝对路径，上传目录与批次目录都在数据根内。
+
+```sh
+cargo build --locked --manifest-path bot/Cargo.toml --bin reimb-reconcile
+reimb-reconcile --data-root /abs/root --batch-dir /abs/root/batch-2026-10 --policy /abs/root/policy.yaml \
+  --uploads /abs/root/uploads --history /abs/fixtures/demo/history.json --period 2026-10 --applicant 林一 \
+  --python /abs/repo/.venv/bin/python --core-dir /abs/repo/core \
+  --agent replay:/abs/repo/fixtures/agent-replay/demo      # 或 octos:<数据目录>，或 none（规则模式）
+```
+
+- `--agent replay:` 用 `fixtures/agent-replay/demo/` 里一次真实 octos 运行的录制（按请求哈希取回），不连模型。
+- `--agent octos:<目录>` 走真实 octos stdio，目录用 `scripts/octos_smoke.py` 准备的隔离档（工具全禁，档案 id `reimb-smoke`）；加 `--record <目录>` 把回答录下来。octos 起不来时整批进入规则模式并在报告里标明。
+- `--agent none` 为规则模式：门禁、关联、打包、终审照常，说明文字用规则模板；图片票读不出时报告会说明漏票候选可能含它的支付。
+- 测试：`cargo test --locked --manifest-path bot/Cargo.toml`（端到端测试调用真实核心子进程，需先 `uv sync`），`uv run pytest core/`。样例生成依赖 macOS 上 pdfium 对 STSong-Light 的字体替换来渲染 F09 与 F06 截图；其他平台生成的图片字节可能不同。
 
 ## 版本与前提
 

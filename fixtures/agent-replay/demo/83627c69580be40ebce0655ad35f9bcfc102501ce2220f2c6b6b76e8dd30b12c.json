@@ -1,0 +1,6 @@
+{
+  "key": "83627c69580be40ebce0655ad35f9bcfc102501ce2220f2c6b6b76e8dd30b12c",
+  "task": "read_screenshot",
+  "response": "{\"merchant\":\"滴滴出行\",\"amount\":\"20.00\",\"service_date\":\"2026-10-17\",\"order_ref\":\"DD-20261017-6630\"}",
+  "note": "recorded from a real octos turn"
+}

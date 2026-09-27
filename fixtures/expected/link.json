@@ -1,0 +1,48 @@
+{
+  "_note": "手写 P2 标准答案：演示批次第一遍（报告 6/4/2、漏票 2、暂未纳入 17）、确认后第二遍，以及边界集的关联项（设计 §10.2 与勘误 A1）。",
+  "period": "2026-10",
+  "demo_first_pass": {
+    "summary": {"automatic": {"count": 6, "cents": 147540}, "needs_decision": {"count": 4, "cents": 342600},
+                "rejected": {"count": 2, "cents": 11960}},
+    "items": {
+      "F01": {"disposition": "accepted", "reasons": [], "category": "餐饮", "service_date": "2026-10-13", "resolution": "automatic"},
+      "F02": {"disposition": "accepted", "reasons": [], "category": "餐饮", "service_date": "2026-10-15", "resolution": "automatic"},
+      "F03": {"disposition": "accepted", "reasons": [], "category": "打车", "service_date": "2026-10-10", "resolution": "automatic"},
+      "F04": {"disposition": "accepted", "reasons": [], "category": "打车", "service_date": "2026-10-12", "resolution": "automatic"},
+      "F05": {"disposition": "accepted", "reasons": [], "category": "打车", "service_date": "2026-10-20", "resolution": "automatic"},
+      "F06": {"disposition": "needs_decision", "reasons": ["EVIDENCE_MISSING"], "category": "打车", "service_date": null, "resolution": null},
+      "F07": {"disposition": "accepted", "reasons": [], "category": "机票", "service_date": "2026-10-09", "resolution": "automatic"},
+      "F08": {"disposition": "needs_decision", "reasons": ["OVER_LIMIT"], "category": "住宿", "service_date": "2026-10-06", "resolution": "automatic"},
+      "F09": {"disposition": "needs_decision", "reasons": ["FACT_UNCONFIRMED"], "category": "餐饮", "service_date": null, "resolution": null},
+      "F10": {"disposition": "needs_decision", "reasons": ["REPLACEMENT_REQUIRES_DECISION"], "category": "机票", "service_date": "2026-09-22", "resolution": null},
+      "F11": {"disposition": "rejected", "reasons": ["WRONG_BUYER"]},
+      "F12": {"disposition": "rejected", "reasons": ["DUPLICATE_INVOICE"]}
+    },
+    "coincidence": {"F06": "陈小北"},
+    "missing_candidates": [
+      {"merchant": "京东商城", "amount_cents": 45900, "payment_date": "2026-10-22", "likelihood": "medium"},
+      {"merchant": "悦途酒店", "amount_cents": 48000, "payment_date": "2026-10-24", "likelihood": "medium"}
+    ],
+    "not_included_count": 17,
+    "missing_deadline": "2026-11-30"
+  },
+  "demo_screenshot": {"merchant": "滴滴出行", "amount_cents": 2000, "service_date": "2026-10-17", "order_ref": "DD-20261017-6630"},
+  "demo_after_confirmation": {
+    "_why": "F06 截图读数确认、F09 票面确认后重新关联。F09 386 元超餐饮日限 150 元（勘误 A1），需申请人说明。",
+    "before_explanations": {"F06": ["accepted", []], "F08": ["needs_decision", ["OVER_LIMIT"]], "F09": ["needs_decision", ["OVER_LIMIT"]],
+                            "F10": ["needs_decision", ["REPLACEMENT_REQUIRES_DECISION"]]},
+    "after_decisions": {"accepted_count": 10, "accepted_cents": 490140, "F06_service_date": "2026-10-17", "F06_resolution": "automatic",
+                        "F08_notes": ["OVER_LIMIT_EXPLAINED"], "F09_notes": ["OVER_LIMIT_EXPLAINED"], "F10_resolution": "confirmed"}
+  },
+  "edge": {
+    "R01": {"disposition": "rejected", "reasons": ["FULL_REFUND"]},
+    "R02": {"disposition": "needs_decision", "reasons": ["PARTIAL_REFUND"]},
+    "R03": {"disposition": "needs_decision", "reasons": ["EVIDENCE_MISSING"]},
+    "R04": {"disposition": "needs_decision", "reasons": ["LINK_CONFLICT"]},
+    "R05": {"disposition": "needs_decision", "reasons": ["LINK_CONFLICT"]},
+    "R06": {"disposition": "needs_decision", "reasons": ["DATE_CONFLICT"], "declared_service_date": "2026-10-12"},
+    "R07": {"disposition": "needs_decision", "reasons": ["OVER_LIMIT"], "service_date": "2026-10-25"},
+    "R08": {"disposition": "needs_decision", "reasons": ["OVER_LIMIT"], "service_date": "2026-10-25"},
+    "R10": {"disposition": "needs_decision", "reasons": ["MULTIPLE_CANDIDATES"]}
+  }
+}

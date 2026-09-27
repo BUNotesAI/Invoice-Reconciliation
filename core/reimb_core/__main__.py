@@ -6,9 +6,12 @@ import sys
 from pydantic import ValidationError
 
 from .errors import CoreError, require
+from .evidence import evidence
 from .extract import extract
 from .gates import gates
 from .history import project, validated_history
+from .link import link
+from .missing import missing
 from .package import package
 from .policy import load_policy
 from .storage import Store, atomic_write, inside
@@ -21,6 +24,9 @@ FIELDS = {
     "extract": ({"source_file_id"}, {"vision_candidate"}),
     "gates": ({"invoices", "history_snapshot"}, set()),
     "history": ({"action"}, {"entries", "events"}),
+    "evidence": ({"source_file_id"}, {"vision_candidate", "confirmed_visual_facts"}),
+    "link": ({"items", "evidence", "history_snapshot", "decisions", "period"}, {"agent_choices"}),
+    "missing": ({"evidence", "occupancy", "ignored_transactions", "period"}, {"history_snapshot"}),
     "package": ({"confirmed_snapshot", "expected_snapshot_hash"}, set()),
     "verify": ({"snapshot_hash", "manifest_object_id", "history_snapshot"}, set()),
 }
@@ -63,6 +69,12 @@ def dispatch(envelope, command):
         target = inside(store.batch / "history" / (result["history_hash"] + ".json"), store.root, must_exist=False)
         atomic_write(target, canonical(result["validated_snapshot"]))
         return result
+    if command == "evidence":
+        return evidence(store, **payload)
+    if command == "link":
+        return link(policy=policy, **payload)
+    if command == "missing":
+        return missing(policy=policy, **payload)
     if command == "package":
         return package(store, policy, **payload)
     return verify(store, policy, **payload)

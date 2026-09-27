@@ -1,0 +1,6 @@
+{
+  "key": "c48e849be37f9f8456d612103c5d99722fce1daac3720d486f14618d2f5d99aa",
+  "task": "classify",
+  "response": "{\"category\":\"住宿\",\"short_name\":\"燕园会展酒店\",\"rationale\":\"该项目为住宿服务，酒店提供的住宿费归属住宿类别。\"}",
+  "note": "recorded from a real octos turn"
+}

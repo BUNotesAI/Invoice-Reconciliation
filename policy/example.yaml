@@ -10,7 +10,7 @@ remind_at: "last_day 09:00"
 limits:
   hotel_per_night_cents: 50000
   meal_per_day_cents: 15000
-  local_taxi_per_day_cents: 5000
+  local_taxi_per_day_cents: 10000
 over_limit: {explain_by: applicant, approve_by: finance}
 categories:
   餐饮: {btype: 餐饮, summary: 餐饮费, kind: meal}

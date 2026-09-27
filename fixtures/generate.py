@@ -99,6 +99,51 @@ EDGE_INVOICES = [
 ]
 
 
+# P2 linking edge cases; each invoice pairs with rows in the P2 edge bill and trip list below.
+LINK_INVOICES = [
+    dict(code="R01", no="26442000000800000001", date="2026-10-14", amount="25.00", upper="贰拾伍圆整",
+         seller="瑞幸咖啡", project="*餐饮服务*餐饮服务", remark=""),
+    dict(code="R02", no="26442000000800000002", date="2026-10-15", amount="36.00", upper="叁拾陆圆整",
+         seller="瑞幸咖啡", project="*餐饮服务*餐饮服务", remark=""),
+    dict(code="R03", no="26442000000800000003", date="2026-10-16", amount="66.00", upper="陆拾陆圆整",
+         seller="深圳潮海居酒楼有限公司", project="*餐饮服务*餐费", remark=""),
+    dict(code="R04", no="26442000000800000004", date="2026-10-17", amount="18.00", upper="壹拾捌圆整",
+         seller="瑞幸咖啡", project="*餐饮服务*餐饮服务", remark=""),
+    dict(code="R05", no="26442000000800000005", date="2026-10-17", amount="18.00", upper="壹拾捌圆整",
+         seller="瑞幸咖啡", project="*餐饮服务*餐饮服务", remark=""),
+    dict(code="R06", no="26112000000800000006", date="2026-10-31", amount="33.00", upper="叁拾叁圆整",
+         seller=DIDI, project=TAXI, remark=""),
+    dict(code="R07", no="26112000000800000007", date="2026-10-31", amount="60.00", upper="陆拾圆整",
+         seller=DIDI, project=TAXI, remark=""),
+    dict(code="R08", no="26112000000800000008", date="2026-10-31", amount="55.00", upper="伍拾伍圆整",
+         seller=DIDI, project=TAXI, remark=""),
+    dict(code="R10", no="26442000000800000010", date="2026-10-20", amount="22.00", upper="贰拾贰圆整",
+         seller="瑞幸咖啡", project="*餐饮服务*餐饮服务", remark=""),
+]
+
+
+def link_rows(pay):
+    return sorted([
+        pay("2026-10-14 09:00:00", "瑞幸咖啡", "拿铁", "25.00", status="已全额退款", seq=101),
+        pay("2026-10-15 09:00:00", "瑞幸咖啡", "拿铁", "36.00", status="已退款(￥10.00)", seq=102),
+        pay("2026-10-17 09:00:00", "瑞幸咖啡", "美式", "18.00", seq=104),
+        pay("2026-10-11 20:00:00", "滴滴出行", "滴滴快车-行程费", "33.00", seq=106),
+        pay("2026-10-25 09:10:00", "滴滴出行", "滴滴快车-行程费", "60.00", seq=107),
+        pay("2026-10-25 19:30:00", "滴滴出行", "滴滴快车-行程费", "55.00", seq=108),
+        pay("2026-10-20 08:30:00", "瑞幸咖啡", "拿铁", "22.00", seq=110),
+        pay("2026-10-21 08:30:00", "瑞幸咖啡", "拿铁", "22.00", seq=111),
+    ], key=lambda row: row[0], reverse=True)
+
+
+def link_trips():
+    trips = [("1", "快车", "2026-10-11 19:40", "深圳", "科技园地铁站", "深圳北站", "12.1", "33.00"),
+             ("2", "快车", "2026-10-25 08:50", "深圳", "科技园地铁站", "会展中心", "20.4", "60.00"),
+             ("3", "快车", "2026-10-25 19:05", "深圳", "会展中心", "科技园地铁站", "19.8", "55.00")]
+    lines = ["滴滴出行-行程单", "申请日期：2026-11-01", "共3笔行程，合计148.00元",
+             "序号 车型 上车时间 城市 起点 终点 里程(公里) 金额(元)"] + [" ".join(trip) for trip in trips]
+    return text_pdf(lines)
+
+
 def pdf_bytes(draw, pages=1):
     stream = io.BytesIO()
     page = canvas.Canvas(stream, invariant=1, pagesize=(595, 842))
@@ -188,10 +233,12 @@ def wechat_bill(rows):
     return output.getvalue()
 
 
+def pay(at, merchant, goods, amount, kind="商户消费", flow="支出", status="支付成功", seq=0):
+    serial = f"42000026{at[5:7]}{at[8:10]}{seq:04d}{sum(map(ord, merchant)) % 100000:05d}0000000"
+    return (at, kind, merchant, goods, flow, f"¥{amount}", "零钱", status, serial, f"M{serial[-12:]}" if kind == "商户消费" else "/", "/")
+
+
 def wechat_rows():
-    def pay(at, merchant, goods, amount, kind="商户消费", flow="支出", status="支付成功", seq=0):
-        serial = f"42000026{at[5:7]}{at[8:10]}{seq:04d}{sum(map(ord, merchant)) % 100000:05d}0000000"
-        return (at, kind, merchant, goods, flow, f"¥{amount}", "零钱", status, serial, f"M{serial[-12:]}" if kind == "商户消费" else "/", "/")
     rows = [
         pay("2026-10-13 08:42:10", "瑞幸咖啡", "瑞幸咖啡-生椰拿铁", "30.80", seq=1),
         pay("2026-10-15 09:05:33", "瑞幸咖啡", "瑞幸咖啡-美式", "27.50", seq=2),
@@ -307,6 +354,11 @@ def generate(root):
         write(root / "edge" / f"{spec['code']}.pdf", image_only_pdf(lines) if spec.get("image_only") else text_pdf(lines))
     write(root / "edge" / "history.json", json_bytes(edge_history()))
     write(root / "edge" / "notes.txt", "不是发票，只是一段文字。\n".encode())
+    for spec in LINK_INVOICES:
+        name = f"{spec['code']}_2026-10-12.pdf" if spec["code"] == "R06" else f"{spec['code']}.pdf"
+        write(root / "edge" / "link" / name, text_pdf(invoice_lines(spec)))
+    write(root / "edge" / "link" / "wechat_bill.xlsx", wechat_bill(link_rows(pay)))
+    write(root / "edge" / "link" / "didi_trips.pdf", link_trips())
     write(root / "edge" / "pages21.pdf", pdf_bytes(lambda page, number: page.drawString(60, 780, f"第 {number + 1} 页"), pages=21))
 
 

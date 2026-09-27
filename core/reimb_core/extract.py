@@ -7,6 +7,7 @@ from pydantic import ValidationError
 from .errors import CoreError, require
 from .models import Fact, Invoice, PdfPage, ImageRegion, ServicePeriod, Source
 from .rules import fact_kind
+from .render import vision_image
 from .storage import pdf_pages
 from .values import cn_upper_to_cents, decimal_cents
 
@@ -105,7 +106,11 @@ def extract(store, source_file_id, vision_candidate=None):
         invoice = parse_text_invoice(source, path.read_bytes())
     elif source.detected_type in ("image_invoice_pdf", "image"):
         if vision_candidate is None:
-            return {"invoice": None, "issues": ["VISION_REQUIRED"]}
+            result = {"invoice": None, "issues": ["VISION_REQUIRED"]}
+            if source.detected_type == "image_invoice_pdf":
+                # The vision step gets a derived image of the stored object, never a caller path.
+                result["vision_image"] = vision_image(store, source)
+            return result
         require(isinstance(vision_candidate, dict)
                 and set(LABELS) - OPTIONAL <= set(vision_candidate) <= set(LABELS)
                 and all(type(value) is str for value in vision_candidate.values()),

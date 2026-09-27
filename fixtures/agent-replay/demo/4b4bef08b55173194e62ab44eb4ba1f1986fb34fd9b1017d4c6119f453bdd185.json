@@ -1,0 +1,6 @@
+{
+  "key": "4b4bef08b55173194e62ab44eb4ba1f1986fb34fd9b1017d4c6119f453bdd185",
+  "task": "classify",
+  "response": "{\"category\":\"打车\",\"short_name\":\"滴滴\",\"rationale\":\"滴滴出行提供客运运输服务，归属打车出行类别。\"}",
+  "note": "recorded from a real octos turn"
+}

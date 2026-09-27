@@ -1,0 +1,6 @@
+{
+  "key": "65560934d03afe5cd87f353d89aeedfa97cf42e2bd9649e092042f992fae97c9",
+  "task": "classify",
+  "response": "{\"category\":\"餐饮\",\"short_name\":\"瑞幸\",\"rationale\":\"瑞幸咖啡主营饮品餐饮服务，与项目标注一致。\"}",
+  "note": "recorded from a real octos turn"
+}
