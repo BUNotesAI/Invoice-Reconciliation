@@ -320,8 +320,8 @@ async fn script_over_real_matrix() {
         )
         .into_future(),
     );
-    tokio::spawn(matrix::run_sync(client.clone(), service.clone()));
-    tokio::spawn(matrix::run_outbox(client.clone(), service.clone()));
+    let first_sync = tokio::spawn(matrix::run_sync(client.clone(), service.clone()));
+    let first_outbox = tokio::spawn(matrix::run_outbox(client.clone(), service.clone()));
     tokio::time::sleep(Duration::from_secs(3)).await;
 
     // Step 2: files in chat; the stranger is refused.
@@ -518,4 +518,48 @@ async fn script_over_real_matrix() {
         .filter(|e| body_contains("终审全部通过")(&e["content"]))
         .count();
     assert_eq!((before, after), (1, 1));
+
+    // Restart: a new client restored from the saved session must reach the quiet room and send queued replies,
+    // and handle a message that arrived while the bot was down.
+    // Stop the first bot completely: its tasks hold their own client handles.
+    first_sync.abort();
+    first_outbox.abort();
+    let _ = first_sync.await;
+    let _ = first_outbox.await;
+    drop(client);
+    connection
+        .execute(
+            "UPDATE outbox SET sent_event = NULL WHERE txn_id = ?1",
+            [pending.last().unwrap().0.clone()],
+        )
+        .unwrap();
+    let restarted = matrix::connect(HOMESERVER, &bot_user, "not-the-password", &session_file)
+        .await
+        .unwrap();
+    // No new activity in the room yet: only the warm-up sync can make the quiet room known.
+    tokio::spawn(matrix::run_sync(restarted.clone(), service.clone()));
+    let started = Instant::now();
+    loop {
+        let unsent = service.with_store(|store| store.pending_outbox()).unwrap();
+        if unsent.is_empty() {
+            break;
+        }
+        matrix::send_outbox(&restarted, &service).await;
+        assert!(
+            started.elapsed() < Duration::from_secs(60),
+            "queued replies stayed unsent after restart: {}",
+            unsent.len()
+        );
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    tokio::spawn(matrix::run_outbox(restarted.clone(), service.clone()));
+    linyi.text("重试").await;
+    linyi
+        .wait_for(
+            &bot_user,
+            since,
+            "reply after the restart",
+            body_contains("当前没有需要重试的步骤"),
+        )
+        .await;
 }

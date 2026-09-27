@@ -393,3 +393,31 @@ async fn upload_during_processing_is_refused_and_reopen_keeps_decisions() {
         1
     );
 }
+
+#[tokio::test]
+async fn confirmation_works_when_the_model_cannot_classify() {
+    // A3 down: rule categories and rule short names still let the applicant confirm.
+    let harness = Harness::new();
+    let service = harness.service_with(common::scripted(|request| match request.task {
+        reimb_bot::agent::AgentTask::Classify => {
+            Err(reimb_bot::agent::AgentError::Unavailable("down".into()))
+        }
+        _ => common::honest(request),
+    }));
+    common::upload_demo(&service).await;
+    service
+        .receive_text(LINYI, ROOM, "$start", "开始对账")
+        .await
+        .unwrap();
+    let batch = service
+        .with_store(|store| store.open_batch_for(LINYI))
+        .unwrap()
+        .unwrap()
+        .id;
+    decide_everything(&service, &batch).await;
+    let revision = service.batch(&batch).unwrap().revision;
+    service.confirm(&batch, LINYI, revision).await.unwrap();
+    assert_eq!(service.batch(&batch).unwrap().state, State::ReadyToShare);
+    let report = service.assessment(&batch).unwrap().unwrap().report;
+    assert!(report.rules_mode);
+}

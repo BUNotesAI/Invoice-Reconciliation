@@ -458,7 +458,7 @@ impl Service {
                     &mut reading,
                     &[],
                     &batch.period,
-                    &batch.applicant,
+                    &applicant_name(&batch.applicant),
                     true,
                 )
                 .await
@@ -705,6 +705,7 @@ impl Service {
         }
         session.paired_user = Some(sender.to_string());
         session.paired_until = Some(now + 3600);
+        session.code = None;
         session.code_hash = None;
         session.code_expires_at = None;
         self.with_store(|store| -> rusqlite::Result<()> {
@@ -959,7 +960,7 @@ impl Service {
                 reading,
                 &active,
                 &batch.period,
-                &batch.applicant,
+                &applicant_name(&batch.applicant),
                 false,
             )
             .await?
@@ -1499,9 +1500,16 @@ pub fn build_snapshot(
         if link["disposition"] != "accepted" {
             continue;
         }
+        // A reading stored without a suggestion (A3 unavailable) falls back to the rule name from the seller.
+        let seller = item
+            .invoice
+            .as_ref()
+            .and_then(|invoice| invoice["seller_name"]["value"].as_str())
+            .unwrap_or_default();
         let short_name = item
             .short_name
             .clone()
+            .or_else(|| reconcile::rule_short_name(seller))
             .ok_or_else(|| ServiceError::Invalid(format!("{} needs a short name", item.file)))?;
         let category = link["category"]
             .as_str()

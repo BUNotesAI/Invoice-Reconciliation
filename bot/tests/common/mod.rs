@@ -109,6 +109,10 @@ impl Harness {
     }
 
     pub fn service(&self) -> Service {
+        self.service_with(scripted(honest))
+    }
+
+    pub fn service_with(&self, agent: AgentPort) -> Service {
         let clock = self.clock.clone();
         let config = ServiceConfig {
             data_root: self.root.clone(),
@@ -127,7 +131,7 @@ impl Harness {
         Service::new(
             config,
             store,
-            scripted(honest),
+            agent,
             Arc::new(move || clock.load(Ordering::SeqCst)),
         )
     }

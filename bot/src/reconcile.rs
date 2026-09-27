@@ -197,6 +197,38 @@ async fn ask<T>(
     }
 }
 
+/// Deterministic short name from a seller: drop a leading city and the company-form suffix, keep what the
+/// label rule accepts (letters, digits inside, at most 20 characters, no trailing digit).
+pub fn rule_short_name(seller: &str) -> Option<String> {
+    const CITIES: &[&str] = &[
+        "北京", "上海", "天津", "重庆", "深圳", "广州", "杭州", "南京", "成都", "武汉", "西安",
+        "苏州",
+    ];
+    const FORMS: &[&str] = &["股份有限公司", "有限责任公司", "有限公司", "集团", "公司"];
+    let mut name = seller.trim().to_string();
+    for city in CITIES {
+        if let Some(rest) = name.strip_prefix(city) {
+            name = rest.trim_start_matches('市').to_string();
+            break;
+        }
+    }
+    for form in FORMS {
+        if let Some(rest) = name.strip_suffix(form) {
+            name = rest.to_string();
+            break;
+        }
+    }
+    let name: String = name
+        .chars()
+        .filter(|c| c.is_alphanumeric() || "·（）()".contains(*c))
+        .take(20)
+        .collect();
+    let name = name
+        .trim_end_matches(|c: char| c.is_ascii_digit())
+        .to_string();
+    crate::validate::label_name(&name).then_some(name)
+}
+
 /// A full ISO date written into the file name is the user's own declaration of the service date.
 pub fn declared_date(file_name: &str) -> Option<String> {
     static DATE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
@@ -433,7 +465,8 @@ pub async fn classify(
             }
             Outcome::RulesMode(why) => {
                 rules_steps.push(format!("A3: {why}"));
-                item.short_name = known;
+                // Rules mode still needs a name for the attachment; the user confirms it with the batch.
+                item.short_name = known.or_else(|| rule_short_name(&view.seller_name.value));
             }
         }
     }
@@ -890,5 +923,33 @@ async fn explain(
             }
         }
         Outcome::RulesMode(why) => rules_steps.push(format!("A4: {why}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rule_short_name;
+
+    #[test]
+    fn rule_short_names() {
+        assert_eq!(
+            rule_short_name("深圳潮海居酒楼有限公司").as_deref(),
+            Some("潮海居酒楼")
+        );
+        assert_eq!(
+            rule_short_name("中国国际航空股份有限公司").as_deref(),
+            Some("中国国际航空")
+        );
+        assert_eq!(
+            rule_short_name("北京市燕园会展酒店有限公司").as_deref(),
+            Some("燕园会展酒店")
+        );
+        assert_eq!(rule_short_name("瑞幸咖啡").as_deref(), Some("瑞幸咖啡"));
+        assert_eq!(
+            rule_short_name("=HYPERLINK(\"x\")").as_deref(),
+            Some("HYPERLINK(x)"),
+            "no leading formula sign survives"
+        );
+        assert_eq!(rule_short_name("有限公司"), None);
     }
 }

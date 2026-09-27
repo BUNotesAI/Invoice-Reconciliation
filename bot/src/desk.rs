@@ -186,6 +186,7 @@ async fn page(State(desk): State<Desk>, Path(batch): Path<String>, headers: Head
         id_hash: sha256_hex(raw.as_bytes()),
         csrf: random_token(),
         batch_id: batch,
+        code: None,
         code_hash: None,
         code_expires_at: None,
         paired_user: None,
@@ -226,25 +227,36 @@ async fn state(
     };
     let now = desk.service.now();
     let Some(user) = user else {
-        // Unpaired: a fresh one-time code for this session, nothing about the batch.
-        let code = pairing_code();
-        session.code_hash = Some(sha256_hex(code.as_bytes()));
-        session.code_expires_at = Some(now + CODE_SECONDS);
-        session.paired_user = None;
-        session.paired_until = None;
-        if desk
-            .service
-            .with_store(|store| {
-                store.begin().and_then(|work| {
-                    work.put_session(&session)?;
-                    work.commit()
-                })
-            })
-            .is_err()
-        {
-            return error(StatusCode::INTERNAL_SERVER_ERROR, "internal");
-        }
-        return Json(json!({"paired": false, "code": code, "expires_in": CODE_SECONDS}))
+        // Unpaired: this session's one-time code (the same on every poll until it expires), nothing about the batch.
+        let current = session
+            .code
+            .clone()
+            .filter(|_| session.code_expires_at.is_some_and(|expires| expires > now));
+        let code = match current {
+            Some(code) => code,
+            None => {
+                let code = pairing_code();
+                session.code = Some(code.clone());
+                session.code_hash = Some(sha256_hex(code.as_bytes()));
+                session.code_expires_at = Some(now + CODE_SECONDS);
+                session.paired_user = None;
+                session.paired_until = None;
+                let saved = desk.service.with_store(|store| {
+                    store.begin().and_then(|work| {
+                        work.put_session(&session)?;
+                        work.commit()
+                    })
+                });
+                if saved.is_err() {
+                    return error(StatusCode::INTERNAL_SERVER_ERROR, "internal");
+                }
+                code
+            }
+        };
+        let expires_in = session
+            .code_expires_at
+            .map_or(CODE_SECONDS, |expires| expires - now);
+        return Json(json!({"paired": false, "code": code, "expires_in": expires_in}))
             .into_response();
     };
     let batch_row = match desk.service.batch(&batch) {

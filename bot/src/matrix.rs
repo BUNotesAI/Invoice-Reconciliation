@@ -241,11 +241,14 @@ pub async fn run_sync(client: Client, service: Arc<Service>) -> Result<()> {
         .with_store(|store| store.setting(token_key))
         .ok()
         .flatten();
+    // A full sync before any handler exists: it loads the joined rooms (a restored session starts with none, and an
+    // incremental sync only mentions rooms with new activity, so queued replies to quiet rooms would stay unsent).
+    let warm_up = client
+        .sync_once(SyncSettings::default().timeout(Duration::from_secs(1)))
+        .await?;
     if token.is_none() {
-        let response = client
-            .sync_once(SyncSettings::default().timeout(Duration::from_secs(1)))
-            .await?;
-        token = Some(response.next_batch.clone());
+        // First start: history before now is not replayed.
+        token = Some(warm_up.next_batch.clone());
     }
     register_handlers(&client, service.clone());
     // A burst of uploads must not be cut to the server's default timeline window (often 10 events per room).

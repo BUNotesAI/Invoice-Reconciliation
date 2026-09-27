@@ -182,6 +182,23 @@ async fn unpaired_page_shows_only_a_code() {
 }
 
 #[tokio::test]
+async fn the_code_stays_the_same_while_the_page_polls() {
+    // The page polls every few seconds; a code that changed on each poll could never be typed in time.
+    let desk = desk().await;
+    let mut browser = Browser::new(&desk.origin);
+    browser.open(&desk.batch).await;
+    let first = browser.state(&desk.batch).await.1["code"].clone();
+    desk.harness.clock.fetch_add(30, Ordering::SeqCst);
+    assert_eq!(browser.state(&desk.batch).await.1["code"], first);
+    desk.harness.clock.fetch_add(600, Ordering::SeqCst);
+    assert_ne!(
+        browser.state(&desk.batch).await.1["code"],
+        first,
+        "an expired code is replaced"
+    );
+}
+
+#[tokio::test]
 async fn pairing_binds_the_chat_sender_once() {
     let desk = desk().await;
     let mut browser = Browser::new(&desk.origin);
@@ -196,7 +213,7 @@ async fn pairing_binds_the_chat_sender_once() {
         .await
         .unwrap();
     assert_eq!(browser.state(&desk.batch).await.1["paired"], false);
-    // Its session got a new code on that poll; the applicant pairs with the fresh one.
+    // The code shown is unchanged by the stranger's attempt; the applicant pairs with it.
     let code = browser.state(&desk.batch).await.1["code"]
         .as_str()
         .unwrap()

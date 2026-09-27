@@ -91,6 +91,8 @@ pub struct DeskSession {
     pub id_hash: String,
     pub csrf: String,
     pub batch_id: String,
+    /// The current pairing code, kept so every poll shows the same code until it expires.
+    pub code: Option<String>,
     pub code_hash: Option<String>,
     pub code_expires_at: Option<i64>,
     pub paired_user: Option<String>,
@@ -134,6 +136,13 @@ impl Store {
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
         connection.execute_batch(SCHEMA)?;
+        // Databases created before the column existed gain it here.
+        let has_code: bool = connection
+            .prepare("SELECT 1 FROM pragma_table_info('desk_sessions') WHERE name = 'code'")?
+            .exists([])?;
+        if !has_code {
+            connection.execute("ALTER TABLE desk_sessions ADD COLUMN code TEXT", [])?;
+        }
         Ok(Self { connection })
     }
 
@@ -268,7 +277,7 @@ impl Store {
     pub fn desk_session(&self, id_hash: &str) -> rusqlite::Result<Option<DeskSession>> {
         self.connection
             .query_row(
-                "SELECT id_hash, csrf, batch_id, code_hash, code_expires_at, paired_user, paired_until FROM desk_sessions WHERE id_hash = ?1",
+                "SELECT id_hash, csrf, batch_id, code, code_hash, code_expires_at, paired_user, paired_until FROM desk_sessions WHERE id_hash = ?1",
                 [id_hash],
                 row_session,
             )
@@ -282,7 +291,7 @@ impl Store {
     ) -> rusqlite::Result<Option<DeskSession>> {
         self.connection
             .query_row(
-                "SELECT id_hash, csrf, batch_id, code_hash, code_expires_at, paired_user, paired_until FROM desk_sessions
+                "SELECT id_hash, csrf, batch_id, code, code_hash, code_expires_at, paired_user, paired_until FROM desk_sessions
                  WHERE code_hash = ?1 AND code_expires_at > ?2 AND paired_user IS NULL",
                 params![code_hash, now],
                 row_session,
@@ -416,11 +425,20 @@ impl Work<'_> {
 
     pub fn put_session(&self, session: &DeskSession) -> rusqlite::Result<()> {
         self.tx.execute(
-            "INSERT INTO desk_sessions (id_hash, csrf, batch_id, code_hash, code_expires_at, paired_user, paired_until)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-             ON CONFLICT(id_hash) DO UPDATE SET code_hash = excluded.code_hash, code_expires_at = excluded.code_expires_at,
-               paired_user = excluded.paired_user, paired_until = excluded.paired_until",
-            params![session.id_hash, session.csrf, session.batch_id, session.code_hash, session.code_expires_at, session.paired_user, session.paired_until],
+            "INSERT INTO desk_sessions (id_hash, csrf, batch_id, code, code_hash, code_expires_at, paired_user, paired_until)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(id_hash) DO UPDATE SET code = excluded.code, code_hash = excluded.code_hash,
+               code_expires_at = excluded.code_expires_at, paired_user = excluded.paired_user, paired_until = excluded.paired_until",
+            params![
+                session.id_hash,
+                session.csrf,
+                session.batch_id,
+                session.code,
+                session.code_hash,
+                session.code_expires_at,
+                session.paired_user,
+                session.paired_until
+            ],
         )?;
         Ok(())
     }
@@ -466,10 +484,11 @@ fn row_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<DeskSession> {
         id_hash: row.get(0)?,
         csrf: row.get(1)?,
         batch_id: row.get(2)?,
-        code_hash: row.get(3)?,
-        code_expires_at: row.get(4)?,
-        paired_user: row.get(5)?,
-        paired_until: row.get(6)?,
+        code: row.get(3)?,
+        code_hash: row.get(4)?,
+        code_expires_at: row.get(5)?,
+        paired_user: row.get(6)?,
+        paired_until: row.get(7)?,
     })
 }
 
