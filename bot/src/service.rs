@@ -330,6 +330,31 @@ impl Service {
         self.reply(&batch.id, room, event_id, &[notice(&text)])
     }
 
+    /// A file the bot could not take (too large, download failed): say so once, change nothing.
+    pub async fn refuse_upload(
+        &self,
+        sender: &str,
+        room: &str,
+        event_id: &str,
+        name: &str,
+        reason: &str,
+    ) -> Result<(), ServiceError> {
+        let _serial = self.serial.lock().await;
+        if !self.claim_inbound(event_id)? {
+            return Ok(());
+        }
+        let _ = sender;
+        self.reply(
+            "-",
+            room,
+            event_id,
+            &[notice(&format!(
+                "文件「{}」没有收进来：{reason}。",
+                upload_name(name)
+            ))],
+        )
+    }
+
     fn claim_inbound(&self, event_id: &str) -> Result<bool, ServiceError> {
         Ok(self.with_store(|store| -> rusqlite::Result<bool> {
             let work = store.begin()?;

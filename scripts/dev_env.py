@@ -124,7 +124,9 @@ client = "{BASE}"
 
 def provision_accounts(config):
     accounts = config.setdefault("accounts", {})
-    for localpart, display in (("reimb-linyi", "林一"), ("reimb-zhoumin", "周敏"), ("reimb-bot", "报销助手")):
+    # reimb-intruder is a third, unauthorised account for permission tests.
+    for localpart, display in (("reimb-linyi", "林一"), ("reimb-zhoumin", "周敏"), ("reimb-bot", "报销助手"),
+                               ("reimb-intruder", "陌生人")):
         account = accounts.setdefault(localpart, {"password": secrets.token_urlsafe(24)})
         private_json(DATA / "credentials.json", config)
         if "access_token" not in account:
@@ -148,7 +150,8 @@ def provision_accounts(config):
     rooms = config.setdefault("rooms", {})
     for name, left, right in (("applicant_bot", "reimb-linyi", "reimb-bot"),
                              ("finance_bot", "reimb-zhoumin", "reimb-bot"),
-                             ("applicant_finance", "reimb-linyi", "reimb-zhoumin")):
+                             ("applicant_finance", "reimb-linyi", "reimb-zhoumin"),
+                             ("intruder_bot", "reimb-intruder", "reimb-bot")):
         first, second = accounts[left], accounts[right]
         alias = "reimb-" + name.replace("_", "-")
         if name not in rooms:

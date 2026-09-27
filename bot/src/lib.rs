@@ -2,6 +2,7 @@
 pub mod agent;
 pub mod core_client;
 pub mod desk;
+pub mod matrix;
 pub mod reconcile;
 pub mod report;
 pub mod service;

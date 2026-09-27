@@ -1,112 +1,125 @@
-//! P0 transport probe. Reimbursement mutations are introduced in later slices.
-use std::{collections::HashMap, path::PathBuf, time::Duration};
+//! reimb-bot: Matrix bot, batch orchestrator and reconciliation desk in one process, driven by a config file.
+use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result};
-use axum::{Router, response::Html, routing::get};
-use matrix_sdk::{
-    Client, Room,
-    config::SyncSettings,
-    ruma::{
-        OwnedUserId,
-        events::room::message::{
-            MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent,
-        },
-    },
+use reimb_bot::{
+    agent::{AgentPort, OctosAdapter, ReplayAdapter},
+    desk::{self, DeskConfig},
+    matrix,
+    service::{Service, ServiceConfig},
+    store::Store,
 };
 use serde::Deserialize;
-use serde_json::json;
 
+/// Private runtime configuration (`$REIMB_BOT_CONFIG`, mode 0600, never in the repository).
 #[derive(Deserialize)]
-struct CredentialFile {
-    accounts: HashMap<String, Account>,
+#[serde(deny_unknown_fields)]
+struct Config {
+    homeserver: String,
+    bot_user: String,
+    /// JSON file holding the bot password at `accounts.<credentials_account>.password`.
+    credentials: PathBuf,
+    credentials_account: String,
+    data_root: PathBuf,
+    policy: PathBuf,
+    python: PathBuf,
+    core_dir: PathBuf,
+    history: PathBuf,
+    period: String,
+    desk_bind: String,
+    desk_origin: String,
+    /// `replay:<dir>`, `octos:<data dir>` or `none`.
+    agent: String,
+    applicants: BTreeMap<String, String>,
 }
 
-#[derive(Deserialize)]
-struct Account {
-    password: String,
-    user_id: OwnedUserId,
-}
-
-const DESK_URL: &str = "http://127.0.0.1:8787/desk/b/p0-demo";
-
-async fn echo(event: OriginalSyncRoomMessageEvent, room: Room) {
-    if event.sender == room.own_user_id() || event.sender.as_str() != "@reimb-linyi:reimb.local" {
-        return;
-    }
-    let MessageType::Text(text) = event.content.msgtype else {
-        return;
-    };
-    if text.body != "开始对账" && text.body != "P0 echo" {
-        return;
-    }
-    // P0 uses fixed synthetic text. No user text is interpolated into HTML.
-    let notice = RoomMessageEventContent::notice_html(
-        "收到测试消息。P0 连接检查通过，请打开对账台测试卡片。",
-        "<b>收到测试消息</b><br>这是一条格式化消息。<ul><li>P0 连接检查通过</li></ul>",
-    );
-    if room.send(notice).await.is_err() {
-        eprintln!("Failed to send echo notice");
-        return;
-    }
-    let content = json!({
-        "msgtype": "rs.robius.robrix.mini_app",
-        "body": format!("[Mini app] 报销对账台\n{DESK_URL}"),
-        "mini_app": {"version": 1, "title": "报销对账台", "url": DESK_URL}
-    });
-    if room.send_raw("m.room.message", content).await.is_err() {
-        eprintln!("Failed to send mini app card");
-    }
+async fn agent(spec: &str) -> Result<AgentPort> {
+    Ok(match spec.split_once(':') {
+        Some(("replay", dir)) => AgentPort::Replay(
+            ReplayAdapter::load(&PathBuf::from(dir)).context("replay recordings")?,
+        ),
+        Some(("octos", dir)) => {
+            match OctosAdapter::start(&PathBuf::from(dir), "reimb-smoke", "bot").await {
+                Ok(adapter) => AgentPort::Octos(adapter),
+                Err(error) => {
+                    eprintln!("octos unavailable, running in rules mode: {error}");
+                    AgentPort::Unavailable
+                }
+            }
+        }
+        _ if spec == "none" => AgentPort::Unavailable,
+        _ => anyhow::bail!("unknown agent {spec}"),
+    })
 }
 
 async fn run() -> Result<()> {
-    let data = std::env::var_os("REIMB_DATA")
+    let path = std::env::var_os("REIMB_BOT_CONFIG")
         .map(PathBuf::from)
-        .context("REIMB_DATA must name the local runtime directory")?;
-    let bytes = tokio::fs::read(data.join("credentials.json"))
-        .await
-        .context("Cannot read local credentials file")?;
-    let credentials: CredentialFile =
-        serde_json::from_slice(&bytes).context("Invalid local credentials schema")?;
-    let account = credentials
-        .accounts
-        .get("reimb-bot")
-        .context("Missing bot account")?;
-    let client = Client::builder()
-        .homeserver_url("http://127.0.0.1:18128")
-        .build()
-        .await
-        .map_err(|_| anyhow::anyhow!("Matrix client initialization failed"))?;
-    client
-        .matrix_auth()
-        .login_username(&account.user_id, &account.password)
-        .initial_device_display_name("Reimbursement P0 bot")
-        .send()
-        .await
-        .map_err(|_| anyhow::anyhow!("Matrix login failed"))?;
-    client
-        .sync_once(SyncSettings::default().timeout(Duration::from_secs(1)))
-        .await
-        .map_err(|_| anyhow::anyhow!("Initial Matrix sync failed"))?;
-    client.add_event_handler(echo);
-    let router = Router::new()
-        .route("/health", get(|| async { "ok" }))
-        .route(
-            "/desk/b/p0-demo",
-            get(|| async { Html(include_str!("../../desk/p0.html")) }),
-        );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:8787").await?;
-    println!("P0 bot ready; desk listening on 127.0.0.1:8787");
+        .context("REIMB_BOT_CONFIG must name the bot config file")?;
+    let config: Config =
+        serde_json::from_slice(&std::fs::read(&path).context("cannot read bot config")?)
+            .context("invalid bot config")?;
+    std::fs::create_dir_all(&config.data_root)?;
+    let credentials: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(&config.credentials).context("cannot read credentials")?,
+    )
+    .context("invalid credentials")?;
+    let password = credentials["accounts"][&config.credentials_account]["password"]
+        .as_str()
+        .context("bot password missing")?;
+    let history =
+        serde_json::from_slice(&std::fs::read(&config.history).context("cannot read history")?)
+            .context("invalid history")?;
+    let store = Store::open(&config.data_root.join("state.sqlite"))?;
+    let service = Arc::new(Service::new(
+        ServiceConfig {
+            data_root: config.data_root.clone(),
+            policy: config.policy.clone(),
+            python: config.python.clone(),
+            core_dir: config.core_dir.clone(),
+            history,
+            period: config.period.clone(),
+            desk_url: config.desk_origin.clone(),
+            applicants: config.applicants.clone(),
+        },
+        store,
+        agent(&config.agent).await?,
+        Arc::new(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs() as i64)
+        }),
+    ));
+    // Finish anything that was executing when the process last stopped, before taking new work.
+    service.recover().await?;
+    let client = matrix::connect(
+        &config.homeserver,
+        &config.bot_user,
+        password,
+        &config.data_root.join("bot").join("matrix-session.json"),
+    )
+    .await?;
+    let router = desk::router(
+        service.clone(),
+        DeskConfig {
+            origin: config.desk_origin.clone(),
+            access_log: config.data_root.join("desk-access.log"),
+        },
+    );
+    let listener = tokio::net::TcpListener::bind(&config.desk_bind).await?;
+    println!("reimb-bot ready; desk on {}", config.desk_origin);
     tokio::select! {
-        result = axum::serve(listener, router) => result.context("Desk server stopped"),
-        result = client.sync(SyncSettings::default()) => result.map_err(|_| anyhow::anyhow!("Matrix sync stopped")),
-        result = tokio::signal::ctrl_c() => result.context("Signal handler failed"),
+        result = axum::serve(listener, router) => result.context("desk server stopped"),
+        result = matrix::run_sync(client.clone(), service.clone()) => result,
+        result = matrix::run_outbox(client, service) => result,
+        result = tokio::signal::ctrl_c() => result.context("signal handler failed"),
     }
 }
 
 #[tokio::main]
 async fn main() {
     if let Err(error) = run().await {
-        eprintln!("{error}");
+        eprintln!("{error:#}");
         std::process::exit(1);
     }
 }

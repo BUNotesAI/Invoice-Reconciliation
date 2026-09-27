@@ -47,12 +47,28 @@ macOS arm64；Docker daemon 已启动；Python 3.9+（运行脚本）、Rust/Car
 ## 一条命令启动后端环境
 
 ```sh
+uv sync                       # 核心依赖（bot 通过 .venv/bin/python 调用核心）
 python3 scripts/dev.py
 ```
 
-它先建立独立 PostgreSQL/Palpo、虚构账号 `reimb-linyi`、`reimb-zhoumin`、`reimb-bot` 及三个不加密私聊，再按 lockfile 编译并前台运行 Rust bot。保留该终端；Ctrl-C 停 bot，项目容器保留以便复跑。单独补建环境运行 `python3 scripts/dev_env.py`，重复执行复用本项目账号/房间，不换密码。
+它先建立独立 PostgreSQL/Palpo、虚构账号 `reimb-linyi`（申请人）、`reimb-zhoumin`（财务）、`reimb-bot`、`reimb-intruder`（无权限的第三方，只用于权限测试）及四个不加密私聊，再把私有配置写到 `$REIMB_DATA/bot.json`（0600），按 lockfile 编译并前台运行 `reimb-bot`。保留该终端；Ctrl-C 停 bot，项目容器保留以便复跑。单独补建环境运行 `python3 scripts/dev_env.py`，重复执行复用本项目账号/房间，不换密码。
 
-页面地址：`http://127.0.0.1:8787/desk/b/p0-demo`。它仅证明嵌入页面链路，不展示发票，不含凭据。
+- Agent 默认用 `fixtures/agent-replay/demo` 的录制回放（只对演示样例有效）；`REIMB_AGENT=octos:<目录>` 走真实 octos，`REIMB_AGENT=none` 为规则模式。
+- bot 的 Matrix 会话保存在 `$REIMB_DATA/work/bot/matrix-session.json`（0600），重启复用同一设备，不再每次登录新增设备。
+- 同步令牌存进状态库；bot 停机期间收到的消息在重启后补处理，入站事件按 event_id 去重。
+- 对账台访问日志：`$REIMB_DATA/work/desk-access.log`，每行只有时间、方法、路径、状态码、耗时，不记 cookie、令牌或请求体。
+
+## 剧本（P3：1–11）
+
+1. 月底最后一天 09:00（Asia/Shanghai）bot 给申请人发一次提醒（同一人同一月只发一次）。
+2. 申请人在与报销助手的私聊里发送发票、微信账单 xlsx、滴滴行程单 PDF、订单截图；每个文件回一条收件确认，重复文件回「已处理，未重复入账」；名单外的人被拒绝。
+3–6. 说「开始对账」：封存收件、读票（图片票经 A1 为候选）、门禁、证据与关联、漏票，回一张报告（6/4/2）和一张对账台卡片，卡片 URL 只含批次 id：`http://127.0.0.1:8787/desk/b/<batch_id>`。
+7. 打开卡片：页面只显示 6 位配对码；把码发给报销助手完成配对（10 分钟有效、一次性；同一发送者 10 分钟内错 5 次锁定；只能配对自己的批次，财务只读）。
+8–9. 在对账台核对图片票读数、确认截图读数、填写超标说明、确认重开票替换；每次提交带 `expected_revision`，版本过期会提示刷新。
+10. 全部判断完后「确认生成」：冻结快照 → 打包 → 终审（七组）→ 原子发布到 `published/<revision>/` 并更新 `CURRENT`。
+11. bot 回帖「终审全部通过（7/7）」和对账台卡片，报销包可在对账台下载。
+
+自动化覆盖：`cargo test --locked --manifest-path bot/Cargo.toml`（服务层剧本、对账台授权必测项、崩溃恢复）；真实 Matrix 端到端需本机 Palpo：`REIMB_LIVE=1 cargo test --locked --manifest-path bot/Cargo.toml --test matrix_live`。
 
 ## 准备 Rinx
 

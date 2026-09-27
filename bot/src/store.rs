@@ -246,6 +246,14 @@ impl Store {
             .collect()
     }
 
+    pub fn setting(&self, key: &str) -> rusqlite::Result<Option<String>> {
+        self.connection
+            .query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| {
+                row.get(0)
+            })
+            .optional()
+    }
+
     pub fn inbound_seen(&self, event_id: &str) -> rusqlite::Result<bool> {
         self.connection
             .query_row(
@@ -391,6 +399,14 @@ impl Work<'_> {
         Ok(())
     }
 
+    pub fn put_setting(&self, key: &str, value: &str) -> rusqlite::Result<()> {
+        self.tx.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
     pub fn mark_inbound(&self, event_id: &str) -> rusqlite::Result<bool> {
         Ok(self.tx.execute(
             "INSERT OR IGNORE INTO inbound (event_id) VALUES (?1)",
@@ -481,5 +497,6 @@ CREATE TABLE IF NOT EXISTS inbound (event_id TEXT PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS desk_sessions (
   id_hash TEXT PRIMARY KEY, csrf TEXT NOT NULL, batch_id TEXT NOT NULL, code_hash TEXT, code_expires_at INTEGER,
   paired_user TEXT, paired_until INTEGER);
+CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS pairing_failures (sender TEXT NOT NULL, at INTEGER NOT NULL);
 ";
