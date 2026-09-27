@@ -1,0 +1,7 @@
+{
+  "rinx_repository": "https://github.com/hagency-org/Rinx.git",
+  "rinx_commit": "05daf9bdb05fafc6d8f04dcb312a35f1d46a661e",
+  "palpo_image": "ghcr.io/palpo-im/palpo@sha256:3c75080072c04c58ca2afb239c90eaaba49c2df32be366981fb9b2ad4301db5b",
+  "postgres_image": "postgres@sha256:06cad38a5d9f5d24b4d83d86def30795d5e4b757fedbf5281172b576dedcd941",
+  "octos_version": "octos 2.0.3-rc.11 (d51601df 2026-09-16)"
+}

@@ -8,7 +8,12 @@ GOSIM Agentic App 黑客松 2026 参赛作品。
 
 ## 状态
 
-开发中。设计、运行方式和已知限制会随第一个可运行版本补齐。
+P0 环境探路已实现，等待外环审查；业务流程尚未实现。
+
+- [冻结设计](docs/design.md)
+- [运行与复现](docs/run.md)
+- [核心契约草案](docs/spec/README.md)
+- [当前限制](docs/limitations.md)
 
 ## 许可证
 
