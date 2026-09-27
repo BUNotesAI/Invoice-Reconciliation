@@ -534,6 +534,8 @@ async fn script_over_real_matrix() {
     let _ = first_sync.await;
     let _ = first_outbox.await;
     drop(client);
+    // While the bot is down: 林一 writes, and one already queued reply is still unsent.
+    linyi.text("重试").await;
     connection
         .execute(
             "UPDATE outbox SET sent_event = NULL WHERE txn_id = ?1",
@@ -543,8 +545,7 @@ async fn script_over_real_matrix() {
     let restarted = matrix::connect(HOMESERVER, &bot_user, "not-the-password", &session_file)
         .await
         .unwrap();
-    // No new activity in the room yet: only the warm-up sync can make the quiet room known.
-    tokio::spawn(matrix::run_sync(restarted.clone(), service.clone()));
+    // The outbox needs no sync at all: with no sync running yet, the quiet room's queued reply goes out.
     let started = Instant::now();
     loop {
         let unsent = service.with_store(|store| store.pending_outbox()).unwrap();
@@ -559,13 +560,14 @@ async fn script_over_real_matrix() {
         );
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
+    // The sync resumes from the saved token: the message written during the downtime is handled.
+    tokio::spawn(matrix::run_sync(restarted.clone(), service.clone()));
     tokio::spawn(matrix::run_outbox(restarted.clone(), service.clone()));
-    linyi.text("重试").await;
     linyi
         .wait_for(
             &bot_user,
             since,
-            "reply after the restart",
+            "reply to the message written while the bot was down",
             body_contains("当前没有需要重试的步骤"),
         )
         .await;

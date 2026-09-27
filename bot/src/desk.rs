@@ -370,6 +370,11 @@ async fn state(
         )
     });
     let follow_ups = desk.service.follow_ups(&batch).unwrap_or_default();
+    let short_names = if batch_row.state == crate::store::State::AwaitingConfirm {
+        desk.service.short_name_review(&batch).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     let muted = if user == batch_row.applicant {
         desk.service
             .with_store(|store| store.muted_merchants(&user))
@@ -390,6 +395,7 @@ async fn state(
         "returned": returned,
         "supplements": supplements,
         "follow_ups": follow_ups,
+        "short_names": short_names,
         "muted_merchants": muted,
     }))
     .into_response()
@@ -646,11 +652,20 @@ async fn confirm_screenshot(
     )
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Confirm {
+    expected_revision: i64,
+    /// Edited short names by item id; every other shown name is confirmed as shown.
+    #[serde(default)]
+    short_names: Map<String, Value>,
+}
+
 async fn confirm(
     State(desk): State<Desk>,
     Path(batch): Path<String>,
     headers: HeaderMap,
-    Json(body): Json<Revision>,
+    Json(body): Json<Confirm>,
 ) -> Response {
     let user = match writer(&desk, &headers, &batch) {
         Ok(user) => user,
@@ -658,7 +673,7 @@ async fn confirm(
     };
     done(
         desk.service
-            .confirm(&batch, &user, body.expected_revision)
+            .confirm_with_names(&batch, &user, body.expected_revision, &body.short_names)
             .await,
     )
 }

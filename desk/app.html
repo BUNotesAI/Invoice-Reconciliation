@@ -275,9 +275,23 @@ function button(text, onClick) {
 function confirmCard(state) {
   const card = el("div", null, "card");
   card.append(el("strong", "全部判断完成"), el("div", "确认后按当前版本生成报销包并终审；生成后不可修改，只能新开版本。", "muted"));
-  const names = (state.report.items || []).filter((item) => item.disposition === "accepted").map((item) => item.short_name).filter(Boolean);
-  if (names.length) card.append(el("div", "文件名里的简称：" + Array.from(new Set(names)).join("、"), "muted"));
-  card.append(button("确认生成", () => post("confirm", {})));
+  // Short names outside the policy table are suggestions: shown here, editable, and confirmed with the batch.
+  const edits = {};
+  const fresh = (state.short_names || []).filter((row) => !row.from_policy);
+  if (fresh.length) {
+    card.append(el("div", "以下简称不在公司简称表里，会写进文件名；确认生成即确认这些简称，可先修改：", "muted"));
+    const seen = new Map();
+    for (const row of fresh) {
+      if (seen.has(row.seller)) { seen.get(row.seller).push(row.item_id); continue; }
+      seen.set(row.seller, [row.item_id]);
+      const input = el("input");
+      input.value = row.short_name || "";
+      input.maxLength = 20;
+      input.addEventListener("input", () => { for (const id of seen.get(row.seller)) edits[id] = input.value.trim(); });
+      card.append(el("div", row.seller), input);
+    }
+  }
+  card.append(button("确认生成", () => post("confirm", { short_names: edits })));
   const back = button("暂不生成", () => post("decline", {}));
   back.className = "secondary";
   card.append(back);

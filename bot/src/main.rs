@@ -33,6 +33,28 @@ struct Config {
     applicants: BTreeMap<String, String>,
     #[serde(default)]
     finance_rooms: BTreeMap<String, String>,
+    /// End-to-end runs only: a file holding the current Unix time in seconds, read on every clock use, so the
+    /// driver can move time (month-end and follow-up reminders). Absent: the system clock.
+    #[serde(default)]
+    clock_file: Option<PathBuf>,
+}
+
+/// The service clock: system time, or the time written in `clock_file` (falling back to system time if unreadable).
+fn clock(file: Option<PathBuf>) -> reimb_bot::service::Clock {
+    let system = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() as i64)
+    };
+    match file {
+        None => Arc::new(system),
+        Some(path) => Arc::new(move || {
+            std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|text| text.trim().parse().ok())
+                .unwrap_or_else(system)
+        }),
+    }
 }
 
 async fn agent(spec: &str) -> Result<AgentPort> {
@@ -87,11 +109,7 @@ async fn run() -> Result<()> {
         },
         store,
         agent(&config.agent).await?,
-        Arc::new(|| {
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_secs() as i64)
-        }),
+        clock(config.clock_file.clone()),
     ));
     // Finish anything that was executing when the process last stopped, before taking new work.
     service.recover().await?;

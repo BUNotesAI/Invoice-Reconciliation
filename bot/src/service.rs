@@ -1155,16 +1155,75 @@ impl Service {
         user: &str,
         expected: i64,
     ) -> Result<(), ServiceError> {
-        self.freeze(batch_id, user, expected).await?;
+        self.confirm_with_names(batch_id, user, expected, &Map::new())
+            .await
+    }
+
+    /// Confirmation that also settles the short names outside the policy table (design A3: 新简称需用户确认);
+    /// `names` holds the applicant's edits by item id, every other shown name is confirmed as shown.
+    pub async fn confirm_with_names(
+        &self,
+        batch_id: &str,
+        user: &str,
+        expected: i64,
+        names: &Map<String, Value>,
+    ) -> Result<(), ServiceError> {
+        self.freeze_with_names(batch_id, user, expected, names)
+            .await?;
         self.execute(batch_id).await
     }
 
-    /// Stores the immutable snapshot and moves to `executing`; a crash after this is finished by `recover`.
+    /// Short names the confirmation will use for accepted items; `from_policy` ones come from the policy table and
+    /// are fixed, the rest are suggestions (model or rule) the applicant confirms or edits.
+    pub fn short_name_review(&self, batch_id: &str) -> Result<Vec<Value>, ServiceError> {
+        let reading = self.reading(batch_id)?;
+        let Some(assessment) = self.assessment(batch_id)? else {
+            return Ok(Vec::new());
+        };
+        let accepted: BTreeSet<&str> = assessment
+            .links
+            .iter()
+            .filter(|link| link["disposition"] == "accepted")
+            .filter_map(|link| link["item_id"].as_str())
+            .collect();
+        Ok(reading
+            .items
+            .iter()
+            .filter(|item| !item.rejected && accepted.contains(item.id.as_str()))
+            .map(|item| {
+                let seller = item
+                    .invoice
+                    .as_ref()
+                    .and_then(|invoice| invoice["seller_name"]["value"].as_str())
+                    .unwrap_or_default();
+                let policy = reading.short_names.get(seller);
+                let name = policy
+                    .cloned()
+                    .or_else(|| item.short_name.clone())
+                    .or_else(|| reconcile::rule_short_name(seller));
+                json!({"item_id": item.id, "file": item.file, "seller": seller, "short_name": name,
+                       "from_policy": policy.is_some()})
+            })
+            .collect())
+    }
+
     pub async fn freeze(
         &self,
         batch_id: &str,
         user: &str,
         expected: i64,
+    ) -> Result<String, ServiceError> {
+        self.freeze_with_names(batch_id, user, expected, &Map::new())
+            .await
+    }
+
+    /// Stores the immutable snapshot and moves to `executing`; a crash after this is finished by `recover`.
+    pub async fn freeze_with_names(
+        &self,
+        batch_id: &str,
+        user: &str,
+        expected: i64,
+        names: &Map<String, Value>,
     ) -> Result<String, ServiceError> {
         {
             let _serial = self.serial.lock().await;
@@ -1176,7 +1235,38 @@ impl Service {
                     batch.state.as_str()
                 )));
             }
-            let reading = self.reading(batch_id)?;
+            let mut reading = self.reading(batch_id)?;
+            let review = self.short_name_review(batch_id)?;
+            for (item_id, name) in names {
+                let shown = review
+                    .iter()
+                    .find(|row| row["item_id"] == item_id.as_str())
+                    .ok_or(ServiceError::NotFound)?;
+                let name = name.as_str().unwrap_or_default().trim();
+                if shown["from_policy"] == true {
+                    return Err(ServiceError::Invalid(
+                        "this short name comes from the policy table".into(),
+                    ));
+                }
+                if !crate::validate::label_name(name) {
+                    return Err(ServiceError::Invalid(format!(
+                        "short name {name:?} is not allowed"
+                    )));
+                }
+                if let Some(item) = reading.items.iter_mut().find(|item| item.id == *item_id) {
+                    item.short_name = Some(name.to_string());
+                }
+            }
+            // Every shown suggestion is confirmed as it stands: the snapshot uses exactly the names on the card.
+            for row in &review {
+                if let (Some(id), Some(name)) =
+                    (row["item_id"].as_str(), row["short_name"].as_str())
+                    && let Some(item) = reading.items.iter_mut().find(|item| item.id == id)
+                    && !names.contains_key(id)
+                {
+                    item.short_name = Some(name.to_string());
+                }
+            }
             let assessment = self.assessment(batch_id)?.ok_or(ServiceError::NotFound)?;
             let decisions = self.with_store(|store| store.decisions(batch_id))?;
             let supplements = self.document_map(batch_id, "supplements")?;
@@ -1191,6 +1281,11 @@ impl Service {
             let now = self.now();
             self.with_store(|store| -> rusqlite::Result<()> {
                 let work = store.begin()?;
+                work.put_document(
+                    batch_id,
+                    "reading",
+                    &serde_json::to_value(&reading).unwrap_or_default(),
+                )?;
                 work.put_document(batch_id, "snapshot", &snapshot)?;
                 work.transition(
                     &batch,

@@ -357,7 +357,7 @@ async fn confirming_after_a_return_refuses_a_changed_frozen_item() {
         .unwrap();
     for item in reading["items"].as_array_mut().unwrap() {
         if item["id"] == f01.as_str() {
-            item["short_name"] = json!("改过的简称");
+            item["invoice"]["remark"]["value"] = json!("改过的备注");
         }
     }
     service

@@ -2,7 +2,9 @@
 use std::{path::Path, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
-use matrix_sdk::ruma::api::client::{filter::FilterDefinition, sync::sync_events::v3::Filter};
+use matrix_sdk::ruma::api::client::{
+    filter::FilterDefinition, message::send_message_event, sync::sync_events::v3::Filter,
+};
 use matrix_sdk::{
     Client, Room,
     authentication::matrix::MatrixSession,
@@ -14,6 +16,7 @@ use matrix_sdk::{
             member::StrippedRoomMemberEvent,
             message::{MessageType, OriginalSyncRoomMessageEvent},
         },
+        serde::Raw,
     },
     store::RoomLoadSettings,
 };
@@ -208,20 +211,21 @@ pub async fn send_outbox(client: &Client, service: &Service) -> usize {
         let Ok(room_id) = OwnedRoomId::try_from(message.room_id.as_str()) else {
             continue;
         };
-        let Some(room) = client.get_room(&room_id) else {
+        // Sent straight through the client-server API: no room state is needed, so replies to rooms the sync has
+        // not mentioned since a restart go out too. The persisted txn_id keeps every resend one Matrix transaction.
+        let Ok(body) = serde_json::value::to_raw_value(&message.content) else {
             continue;
         };
-        let txn = OwnedTransactionId::from(message.txn_id.as_str());
-        match room
-            .send_raw("m.room.message", message.content.clone())
-            .with_transaction_id(&txn)
-            .await
-        {
+        let request = send_message_event::v3::Request::new_raw(
+            room_id,
+            OwnedTransactionId::from(message.txn_id.as_str()),
+            "m.room.message".into(),
+            Raw::from_json(body),
+        );
+        match client.send(request).await {
             Ok(response) => {
                 if service
-                    .with_store(|store| {
-                        store.mark_sent(message.id, response.response.event_id.as_str())
-                    })
+                    .with_store(|store| store.mark_sent(message.id, response.event_id.as_str()))
                     .is_ok()
                 {
                     sent += 1;
@@ -233,23 +237,22 @@ pub async fn send_outbox(client: &Client, service: &Service) -> usize {
     sent
 }
 
-/// Sync loop with a persisted token, so messages sent while the bot was down are handled after a restart;
-/// inbound de-duplication makes the replay harmless. The first start skips older history.
+/// Sync loop with a persisted token, so messages sent while the bot was down are handled after a restart.
 pub async fn run_sync(client: Client, service: Arc<Service>) -> Result<()> {
     let token_key = "matrix-sync-token";
     let mut token = service
         .with_store(|store| store.setting(token_key))
         .ok()
         .flatten();
-    // A full sync before any handler exists: it loads the joined rooms (a restored session starts with none, and an
-    // incremental sync only mentions rooms with new activity, so queued replies to quiet rooms would stay unsent).
-    let warm_up = client
-        .sync_once(SyncSettings::default().timeout(Duration::from_secs(1)))
-        .await?;
     if token.is_none() {
-        // First start: history before now is not replayed.
-        token = Some(warm_up.next_batch.clone());
+        // First start: one sync without handlers marks where history ends; older messages are not replayed.
+        let first = client
+            .sync_once(SyncSettings::default().timeout(Duration::from_secs(1)))
+            .await?;
+        token = Some(first.next_batch.clone());
     }
+    // Later starts resume from the saved token with handlers in place, so messages sent while the bot was down
+    // are handled; inbound de-duplication makes a replayed event harmless.
     register_handlers(&client, service.clone());
     // A burst of uploads must not be cut to the server's default timeline window (often 10 events per room).
     let mut definition = FilterDefinition::default();

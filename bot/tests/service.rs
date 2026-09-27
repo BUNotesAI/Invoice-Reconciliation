@@ -869,3 +869,119 @@ async fn confirmation_works_when_the_model_cannot_classify() {
     let report = service.assessment(&batch).unwrap().unwrap().report;
     assert!(report.rules_mode);
 }
+
+fn published_pdfs(harness: &Harness, service: &Service, batch: &str) -> Vec<String> {
+    let revision = service.batch(batch).unwrap().revision;
+    let manifest: Value = serde_json::from_slice(
+        &std::fs::read(
+            harness
+                .root
+                .join("batches")
+                .join(batch)
+                .join("published")
+                .join(revision.to_string())
+                .join("manifest.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let mut names: Vec<String> = manifest["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|f| f["relative_name"].as_str())
+        .filter(|name| name.ends_with(".pdf"))
+        .map(String::from)
+        .collect();
+    names.sort();
+    names
+}
+
+#[tokio::test]
+async fn new_short_names_are_confirmed_or_edited_at_confirmation() {
+    let expected: Value =
+        serde_json::from_slice(&std::fs::read(repo().join("fixtures/expected/demo.json")).unwrap())
+            .unwrap();
+    let mut wanted: Vec<String> = expected["ledger"]["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["file"].as_str().unwrap().to_string())
+        .collect();
+    wanted.sort();
+    for edit in [false, true] {
+        let harness = Harness::new();
+        let (service, batch) = to_needs_decision(&harness).await;
+        decide_everything(&service, &batch).await;
+        let review = service.short_name_review(&batch).unwrap();
+        let by_seller = |seller: &str| {
+            review
+                .iter()
+                .find(|row| row["seller"] == seller)
+                .unwrap()
+                .clone()
+        };
+        // Policy-table names are fixed; everything else is a suggestion shown for confirmation.
+        assert_eq!(by_seller("瑞幸咖啡")["from_policy"], true);
+        assert_eq!(by_seller("北京滴滴出行科技有限公司")["from_policy"], true);
+        let chaohai = by_seller("深圳潮海居酒楼有限公司");
+        assert_eq!(chaohai["from_policy"], false);
+        let revision = service.batch(&batch).unwrap().revision;
+        let names = |pairs: &[(&Value, &str)]| -> Map<String, Value> {
+            pairs
+                .iter()
+                .map(|(row, name)| (row["item_id"].as_str().unwrap().to_string(), json!(name)))
+                .collect()
+        };
+        let ruixing = by_seller("瑞幸咖啡");
+        for (bad, why) in [
+            (
+                names(&[(&ruixing, "咖啡")]),
+                "a policy-table name cannot be changed",
+            ),
+            (names(&[(&chaohai, "../x")]), "an unsafe name is refused"),
+            (
+                names(&[(&chaohai, "潮海居2")]),
+                "a name may not end in a digit",
+            ),
+        ] {
+            let result = service
+                .confirm_with_names(&batch, LINYI, revision, &bad)
+                .await;
+            assert!(
+                matches!(result, Err(ServiceError::Invalid(_))),
+                "{why}: {result:?}"
+            );
+        }
+        let unknown: Map<String, Value> = [("item-x".to_string(), json!("某店"))]
+            .into_iter()
+            .collect();
+        assert!(matches!(
+            service
+                .confirm_with_names(&batch, LINYI, revision, &unknown)
+                .await,
+            Err(ServiceError::NotFound)
+        ));
+        assert_eq!(service.batch(&batch).unwrap().state, State::AwaitingConfirm);
+        let chosen = if edit {
+            names(&[(&chaohai, "潮海居酒楼")])
+        } else {
+            Map::new()
+        };
+        service
+            .confirm_with_names(&batch, LINYI, revision, &chosen)
+            .await
+            .unwrap();
+        assert_eq!(service.batch(&batch).unwrap().state, State::ReadyToShare);
+        let published = published_pdfs(&harness, &service, &batch);
+        if edit {
+            assert!(
+                published.contains(&"26442000000500010191_潮海居酒楼_386_餐饮.pdf".to_string()),
+                "{published:?}"
+            );
+        } else {
+            // Confirmed as shown, the files carry exactly the hand-written expected names.
+            assert_eq!(published, wanted);
+        }
+    }
+}
