@@ -373,15 +373,46 @@ static TOKENS: LazyLock<Regex> = LazyLock::new(|| {
         r"|(?P<md>(?P<mm>[0-9]{1,2})(?:月|/)(?P<mdd>[0-9]{1,2})[日号]?)",
         r"|(?P<time>[0-9]{1,2}:[0-9]{2})",
         r"|(?P<num>(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.(?P<frac>[0-9]+))?)",
-        r"|(?P<cn>[零一二两三四五六七八九十百]+)(?:张|晚|笔|天|次|个|元|块|单|趟)",
+        r"|(?P<cn>[零〇一二两三四五六七八九十百千万亿]+)(?P<unit>张|晚|笔|天|次|个|元|块|单|趟)?",
     ))
     .unwrap()
 });
 
-/// Every number a reader would see, including dates, times and Chinese-numeral counts.
+/// Full-width digits and punctuation become ASCII, formal (大写) numerals become plain ones,
+/// so every way of writing a number reaches the same token rules.
+pub fn normalize_numerals(text: &str) -> String {
+    text.chars()
+        .map(|c| match c {
+            '０'..='９' => char::from_u32(c as u32 - '０' as u32 + '0' as u32).unwrap_or(c),
+            '．' => '.',
+            '：' => ':',
+            '／' => '/',
+            '－' => '-',
+            '壹' => '一',
+            '贰' | '貳' => '二',
+            '叁' | '參' => '三',
+            '肆' => '四',
+            '伍' => '五',
+            '陆' | '陸' => '六',
+            '柒' => '七',
+            '捌' => '八',
+            '玖' => '九',
+            '拾' => '十',
+            '佰' => '百',
+            '仟' => '千',
+            '萬' => '万',
+            '億' => '亿',
+            other => other,
+        })
+        .collect()
+}
+
+/// Every number a reader would see: dates, times, Arabic, full-width and Chinese numerals, with or without a unit.
+/// It errs towards counting: a false number only sends the step to rules mode, a missed one lets a fabrication through.
 pub fn numeric_tokens(text: &str) -> Vec<Token> {
+    let text = normalize_numerals(text);
     let mut tokens = Vec::new();
-    for capture in TOKENS.captures_iter(text) {
+    for capture in TOKENS.captures_iter(&text) {
         if capture.name("iso").is_some() {
             tokens.push(Token::Date {
                 year: capture["iy"].parse().ok(),
@@ -416,6 +447,10 @@ pub fn numeric_tokens(text: &str) -> Vec<Token> {
                 fractional: !fraction.is_empty(),
             });
         } else if let Some(chinese) = capture.name("cn") {
+            // A lone 一 without a unit is ordinary prose (一下, 进一步), not a quantity.
+            if chinese.as_str() == "一" && capture.name("unit").is_none() {
+                continue;
+            }
             let value = chinese_number(chinese.as_str())
                 .map(|value| value as i128 * 100)
                 .unwrap_or(-1);
@@ -429,28 +464,46 @@ pub fn numeric_tokens(text: &str) -> Vec<Token> {
 }
 
 fn chinese_number(text: &str) -> Option<i64> {
-    let digit = |c: char| {
-        "零一二三四五六七八九"
+    let digit = |c: char| match c {
+        '零' | '〇' => Some(0),
+        '两' => Some(2),
+        _ => "一二三四五六七八九"
             .find(c)
-            .map(|index| (index / 3) as i64)
-            .or((c == '两').then_some(2))
+            .map(|index| (index / 3) as i64 + 1),
     };
-    let mut total = 0;
-    let mut current = 0;
+    // Without any place character the run is read digit by digit: 一五六〇 is 1560.
+    if !text.chars().any(|c| "十百千万亿".contains(c)) {
+        return text.chars().try_fold(0i64, |value, c| {
+            value.checked_mul(10)?.checked_add(digit(c)?)
+        });
+    }
+    let (mut total, mut section, mut current) = (0i64, 0i64, 0i64);
     for c in text.chars() {
         match c {
-            '十' => {
-                total += if current == 0 { 10 } else { current * 10 };
+            '十' | '百' | '千' => {
+                let place = match c {
+                    '十' => 10,
+                    '百' => 100,
+                    _ => 1000,
+                };
+                section += current.max(1) * place;
                 current = 0;
             }
-            '百' => {
-                total += current.max(1) * 100;
+            '万' | '亿' => {
+                let place = if c == '万' { 10_000 } else { 100_000_000 };
+                let group = (section + current).max(1);
+                total = if c == '亿' {
+                    (total + group) * place
+                } else {
+                    total + group * place
+                };
+                section = 0;
                 current = 0;
             }
             _ => current = digit(c)?,
         }
     }
-    Some(total + current)
+    Some(total + section + current)
 }
 
 /// Strict yuan text to integer cents: "386", "386.0", "386.00", optional leading ¥ or ￥.
@@ -568,6 +621,48 @@ mod tests {
         assert!(explanations(extra_field, &allowed, &facts()).is_err());
         let duplicate = r#"{"items":[],"items":[]}"#;
         assert!(explanations(duplicate, &allowed, &facts()).is_err());
+    }
+
+    #[test]
+    fn numbers_in_any_script_are_counted() {
+        // Fabricated amounts in full-width, formal and Chinese numerals, with and without units.
+        for text in [
+            "房费 １６６０ 元。",
+            "房费伍佰元。",
+            "房费壹仟伍佰陆拾元，另加三千元。",
+            "共一万",
+            "合计一六六〇",
+            "房费一千六百",
+        ] {
+            assert!(!check(text, &["F08.amount"]).is_empty(), "{text}");
+        }
+        // The same numbers written correctly still pass.
+        for text in [
+            "房费 １５６０ 元。",
+            "房费壹仟伍佰陆拾元。",
+            "房费一千五百六十元。",
+            "房费一五六〇元。",
+        ] {
+            assert!(check(text, &["F08.amount"]).is_empty(), "{text}");
+        }
+        assert!(check("住了三晚，需要看一下。", &["F08.nights"]).is_empty());
+        assert!(!check("两晚。", &["F08.nights"]).is_empty());
+    }
+
+    #[test]
+    fn chinese_numerals_parse() {
+        for (text, value) in [
+            ("一千五百六十", 1560),
+            ("三千", 3000),
+            ("一万", 10000),
+            ("十二", 12),
+            ("两百", 200),
+            ("一亿零五", 100000005),
+            ("一五六〇", 1560),
+            ("三", 3),
+        ] {
+            assert_eq!(chinese_number(text), Some(value), "{text}");
+        }
     }
 
     #[test]

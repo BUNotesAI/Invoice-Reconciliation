@@ -53,7 +53,7 @@ impl AgentTask {
                 "Task A4: write one short explanation per requested item for the reviewer. Return only ",
                 "{\"items\":[{\"item_id\":...,\"fact_refs\":[fact ids you rely on],\"explanation\":...}]}. Every number in ",
                 "an explanation (amounts, dates, counts) must be the value of a cited fact, cited in the same order the ",
-                "numbers appear, with no other numbers. Do not claim any status such as approved, submitted, paid or verified."
+                "numbers appear, with no other numbers. Write numbers with Arabic digits. Do not claim any status such as approved, submitted, paid or verified."
             ),
         }
     }
