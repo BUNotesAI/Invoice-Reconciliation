@@ -29,9 +29,14 @@ def grade(payment, policy, history_sellers, travel):
     return "low", "NO_SIGNAL"
 
 
-def missing(evidence, occupancy, policy, ignored_transactions, period, history_snapshot=None):
+def missing(evidence, occupancy, policy, ignored_transactions, period, history_snapshot=None, ignored_merchants=None):
+    """`ignored_merchants` are the applicant's own 「以后都不提醒这个商户」 choices, on top of the policy table."""
     require(isinstance(evidence, list) and isinstance(ignored_transactions, list)
             and all(isinstance(ref, str) for ref in ignored_transactions), message="Invalid missing input")
+    ignored_merchants = [] if ignored_merchants is None else ignored_merchants
+    require(isinstance(ignored_merchants, list) and all(isinstance(name, str) and 0 < len(name) <= 128 for name in ignored_merchants),
+            message="Invalid ignored merchants")
+    muted = list(policy.ignore_merchants) + [name for name in ignored_merchants if name not in policy.ignore_merchants]
     require(isinstance(occupancy, dict) and set(occupancy) == {"claims", "travel_dates"}, message="Invalid occupancy")
     evidence = [Evidence.model_validate(raw) for raw in evidence]
     taken = {claim["evidence_id"] for claim in occupancy["claims"]}
@@ -53,7 +58,7 @@ def missing(evidence, occupancy, policy, ignored_transactions, period, history_s
         if payment.transaction_ref in ignored:
             ignored_rows.append(payment.id)
             continue
-        if any(name in payment.merchant for name in policy.ignore_merchants):
+        if any(name in payment.merchant for name in muted):
             ignored_by_merchant.append(payment.id)
             continue
         likelihood, reason = grade(payment, policy, history_sellers, travel)
@@ -65,4 +70,7 @@ def missing(evidence, occupancy, policy, ignored_transactions, period, history_s
         else:
             candidates.append(dict(row, status="discovered", deadline=due, decision_history=[], claimed_invoice_id=None))
     return {"candidates": candidates, "not_included": not_included, "ignored_transactions": ignored_rows,
-            "ignored_by_merchant": ignored_by_merchant, "ignored_merchants": list(policy.ignore_merchants)}
+            "ignored_by_merchant": ignored_by_merchant, "ignored_merchants": muted,
+            # What the follow-up needs from the policy: the title to ask for, when to remind, until when.
+            "follow_up": {"billing": {"name": policy.company.name, "tax_id": policy.company.tax_id},
+                          "remind": list(policy.missing_invoice.remind), "deadline": due}}

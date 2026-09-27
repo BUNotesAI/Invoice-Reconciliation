@@ -27,6 +27,7 @@ pub enum CoreCommand {
     History,
     Package,
     Verify,
+    Claim,
 }
 
 impl CoreCommand {
@@ -41,6 +42,7 @@ impl CoreCommand {
             Self::History => "history",
             Self::Package => "package",
             Self::Verify => "verify",
+            Self::Claim => "claim",
         }
     }
 }

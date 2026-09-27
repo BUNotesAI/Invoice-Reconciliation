@@ -146,6 +146,13 @@ struct Linked {
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct MissingRow {
+    /// Core id of the candidate (`missing-<payment evidence id>`); absent in assessments stored before P4c.
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub payment_evidence_id: String,
+    #[serde(default)]
+    pub deadline: String,
     pub merchant: String,
     pub amount_cents: i64,
     pub payment_date: String,
@@ -157,6 +164,7 @@ struct Missing {
     candidates: Vec<MissingRow>,
     not_included: Vec<Value>,
     ignored_merchants: Vec<String>,
+    follow_up: Value,
 }
 
 /// Policy limits the explanation step may cite; read through the core, never parsed here.
@@ -278,6 +286,9 @@ pub struct Reading {
     #[serde(default)]
     pub finance: Vec<String>,
     pub agent_available: bool,
+    /// Merchants this applicant chose never to be reminded about again; applied at the next reading.
+    #[serde(default)]
+    pub ignored_merchants: Vec<String>,
 }
 
 /// The current judgement of a reading: report card, per-item link rows and the hashes a snapshot binds to.
@@ -289,6 +300,9 @@ pub struct Assessment {
     pub replacements: BTreeMap<String, Vec<String>>,
     pub policy_hash: String,
     pub history_hash: String,
+    /// Billing title, reminder slots and deadline for missing-invoice follow-up, as the core read them from policy.
+    #[serde(default)]
+    pub follow_up: Value,
 }
 
 #[derive(Deserialize)]
@@ -357,6 +371,7 @@ pub async fn read(
         short_names: policy.policy_short_names,
         finance: policy.policy_finance,
         agent_available: agent.is_available(),
+        ignored_merchants: Vec::new(),
     };
     for source in sources {
         match source.detected_type.as_str() {
@@ -550,7 +565,8 @@ pub async fn assess(
         core.call(
             CoreCommand::Missing,
             &json!({"evidence": reading.evidence, "occupancy": linked.occupancy, "ignored_transactions": [],
-                    "period": period, "history_snapshot": reading.history_snapshot}),
+                    "period": period, "history_snapshot": reading.history_snapshot,
+                    "ignored_merchants": reading.ignored_merchants}),
         )
         .await?,
         "missing",
@@ -646,6 +662,7 @@ pub async fn assess(
         replacements,
         policy_hash: hashes.policy_hash,
         history_hash: hashes.history_hash,
+        follow_up: missing.follow_up,
     })
 }
 

@@ -20,6 +20,8 @@ use crate::{
     validate::yuan_to_cents,
 };
 
+mod followup;
+
 pub const BUSINESS_OFFSET_SECONDS: i64 = 8 * 3600;
 pub const VERIFY_ATTEMPTS: i64 = 3;
 
@@ -387,6 +389,14 @@ impl Service {
             }
             Err(error) => return Err(error.into()),
         };
+        let claimed = match self
+            .claim_upload(&batch, sender, room, event_id, &source, &display)
+            .await?
+        {
+            followup::Claim::Refused => return Ok(()),
+            followup::Claim::Matched { spend, text } => Some((spend, text)),
+            followup::Claim::Unrelated => None,
+        };
         let now = self.now();
         self.with_store(|store| -> rusqlite::Result<()> {
             let before = store.files(&batch.id)?.len();
@@ -405,7 +415,7 @@ impl Service {
                     },
                 )?;
             }
-            let text = if added {
+            let mut text = if added {
                 format!(
                     "收到「{display}」，本批次共 {} 个文件。继续发，或说「开始对账」。",
                     before + 1
@@ -413,6 +423,10 @@ impl Service {
             } else {
                 format!("「{display}」已处理过，未重复入账。")
             };
+            if let Some((spend, claim)) = &claimed {
+                work.put_spend(spend)?;
+                text = format!("{claim}\n{text}");
+            }
             answer(&work, &batch.id, room, event_id, &[notice(&text)])?;
             work.commit()
         })?;
@@ -538,18 +552,22 @@ impl Service {
                 Ok(history) => history,
                 Err(error) => return Err(error),
             };
+            let muted = self.with_store(|store| store.muted_merchants(&batch.applicant))?;
             match reconcile::read(&core, &mut agent, &sources, &history, &batch.period).await {
-                Ok(mut reading) => reconcile::assess(
-                    &core,
-                    &mut agent,
-                    &mut reading,
-                    &[],
-                    &batch.period,
-                    &applicant_name(&batch.applicant),
-                    true,
-                )
-                .await
-                .map(|assessment| (reading, assessment)),
+                Ok(mut reading) => {
+                    reading.ignored_merchants = muted;
+                    reconcile::assess(
+                        &core,
+                        &mut agent,
+                        &mut reading,
+                        &[],
+                        &batch.period,
+                        &applicant_name(&batch.applicant),
+                        true,
+                    )
+                    .await
+                    .map(|assessment| (reading, assessment))
+                }
                 Err(error) => Err(error),
             }
         };
@@ -1490,7 +1508,20 @@ impl Service {
     /// Imported history plus the appended ledger, without this batch's own events (finding F6): a batch's own
     /// earlier submission must not make its resubmitted invoices look like duplicates.
     async fn history_entries(&self, batch: &str) -> Result<Value, ServiceError> {
-        let events = self.with_store(|store| store.history_events(Some(batch)))?;
+        self.history_with(batch, Some(batch)).await
+    }
+
+    /// The whole reimbursement history, this batch included (duplicate and 「先找」 checks).
+    async fn history_all(&self, batch: &str) -> Result<Value, ServiceError> {
+        self.history_with(batch, None).await
+    }
+
+    async fn history_with(
+        &self,
+        batch: &str,
+        excluding: Option<&str>,
+    ) -> Result<Value, ServiceError> {
+        let events = self.with_store(|store| store.history_events(excluding))?;
         let mut entries = self.config.history.as_array().cloned().unwrap_or_default();
         if !events.is_empty() {
             let projected = self
@@ -1677,6 +1708,8 @@ impl Service {
             .ok_or(ServiceError::NotFound)?;
         let now = self.now();
         let at = utc(now);
+        // Approval opens the missing-invoice follow-ups (已通过 → 跟进漏票) in the same unit of work.
+        let (spends, follow) = self.plan_follow_ups(&batch, now)?;
         self.with_store(|store| -> rusqlite::Result<()> {
             let work = store.begin()?;
             for item in snapshot["items"].as_array().cloned().unwrap_or_default() {
@@ -1697,6 +1730,7 @@ impl Service {
                 },
             )?;
             work.close_batch(batch_id)?;
+            Self::write_follow_ups(&work, &spends, follow.is_some(), now)?;
             work.enqueue(
                 batch_id,
                 &batch.room_id,
@@ -1706,6 +1740,20 @@ impl Service {
                     batch.period, batch.revision
                 )),
             )?;
+            if let Some(text) = &follow {
+                work.enqueue(
+                    batch_id,
+                    &batch.room_id,
+                    &format!("{batch_id}-{}-follow-up", batch.revision),
+                    &notice(text),
+                )?;
+                work.enqueue(
+                    batch_id,
+                    &batch.room_id,
+                    &format!("{batch_id}-{}-follow-up-card", batch.revision),
+                    &desk_card(&self.config.desk_url, batch_id),
+                )?;
+            }
             work.commit()
         })?;
         Ok(())

@@ -89,6 +89,9 @@ def test_missing_invoices(demo):
             for row in result["candidates"]] == want["missing_candidates"]
     assert len(result["not_included"]) == want["not_included_count"]
     assert {row["deadline"] for row in result["candidates"]} == {want["missing_deadline"]}
+    assert result["follow_up"] == {"billing": {"name": "示例科技有限公司", "tax_id": "91440300XXXXXXXX0A"},
+                                   "remind": ["on_detect", "weekly_mon_09:00", "deadline_minus_3d"],
+                                   "deadline": want["missing_deadline"]}
 
 
 def test_ignoring_one_transaction_and_a_merchant(demo, tmp_path):
@@ -222,3 +225,14 @@ def test_trip_list_must_agree_with_its_stated_total(runtime):
     source = runtime.ingest(path)
     assert source["detected_type"] == "didi_trip_pdf"
     runtime.fails("evidence", {"source_file_id": source["id"]}, "FIELD_CONFLICT", 3)
+
+
+def test_the_applicant_can_mute_a_merchant(demo):
+    runtime, run = demo
+    result = runtime.ok("missing", {"evidence": run["evidence"], "occupancy": run["linked"]["occupancy"], "ignored_transactions": [],
+                                    "period": LINK["period"], "history_snapshot": run["history"]["validated_snapshot"],
+                                    "ignored_merchants": ["悦途酒店"]})
+    assert [row["merchant"] for row in result["candidates"]] == ["京东商城"]
+    assert result["ignored_merchants"] == ["悦途酒店"] and len(result["ignored_by_merchant"]) == 1
+    runtime.fails("missing", {"evidence": run["evidence"], "occupancy": run["linked"]["occupancy"], "ignored_transactions": [],
+                              "period": LINK["period"], "ignored_merchants": "悦途酒店"}, "INVALID_SCHEMA", 2)

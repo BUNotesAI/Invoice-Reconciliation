@@ -66,6 +66,8 @@ pub fn router(service: Arc<Service>, config: DeskConfig) -> Router {
         .route("/desk/api/b/{batch}/approve", post(approve))
         .route("/desk/api/b/{batch}/return", post(return_items))
         .route("/desk/api/b/{batch}/supplement", post(supplement))
+        .route("/desk/api/b/{batch}/follow-up", post(follow_up))
+        .route("/desk/api/b/{batch}/unmute", post(unmute))
         .layer(middleware::from_fn_with_state(desk.clone(), host_guard))
         .layer(middleware::from_fn_with_state(desk.clone(), access_log))
         .with_state(desk)
@@ -367,6 +369,14 @@ async fn state(
                 .collect::<Vec<_>>(),
         )
     });
+    let follow_ups = desk.service.follow_ups(&batch).unwrap_or_default();
+    let muted = if user == batch_row.applicant {
+        desk.service
+            .with_store(|store| store.muted_merchants(&user))
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     Json(json!({
         "paired": true, "user": user, "role": role,
         "csrf": session.csrf,
@@ -379,6 +389,8 @@ async fn state(
         "published": published,
         "returned": returned,
         "supplements": supplements,
+        "follow_ups": follow_ups,
+        "muted_merchants": muted,
     }))
     .into_response()
 }
@@ -673,6 +685,64 @@ async fn decline(
 struct ReturnItems {
     expected_revision: i64,
     items: Map<String, Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FollowUp {
+    expected_revision: i64,
+    spend_id: String,
+    action: String,
+    #[serde(default)]
+    payload: Value,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Unmute {
+    expected_revision: i64,
+    merchant: String,
+}
+
+async fn follow_up(
+    State(desk): State<Desk>,
+    Path(batch): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<FollowUp>,
+) -> Response {
+    let user = match writer(&desk, &headers, &batch) {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    done(
+        desk.service
+            .follow_up(
+                &batch,
+                &user,
+                body.expected_revision,
+                &body.spend_id,
+                &body.action,
+                &body.payload,
+            )
+            .await,
+    )
+}
+
+async fn unmute(
+    State(desk): State<Desk>,
+    Path(batch): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<Unmute>,
+) -> Response {
+    let user = match writer(&desk, &headers, &batch) {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    done(
+        desk.service
+            .unmute(&batch, &user, body.expected_revision, &body.merchant)
+            .await,
+    )
 }
 
 #[derive(Deserialize)]

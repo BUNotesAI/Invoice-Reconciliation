@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 from pydantic import ValidationError
 
+from .claim import claim
 from .errors import CoreError, require
 from .evidence import evidence
 from .extract import extract
@@ -26,7 +27,8 @@ FIELDS = {
     "history": ({"action"}, {"entries", "events"}),
     "evidence": ({"source_file_id"}, {"vision_candidate", "confirmed_visual_facts"}),
     "link": ({"items", "evidence", "history_snapshot", "decisions", "period"}, {"agent_choices"}),
-    "missing": ({"evidence", "occupancy", "ignored_transactions", "period"}, {"history_snapshot"}),
+    "missing": ({"evidence", "occupancy", "ignored_transactions", "period"}, {"history_snapshot", "ignored_merchants"}),
+    "claim": ({"missing_spends", "history_snapshot"}, {"invoice", "missing_id"}),
     "package": ({"confirmed_snapshot", "expected_snapshot_hash"}, set()),
     "verify": ({"snapshot_hash", "manifest_object_id", "history_snapshot"}, set()),
 }
@@ -75,6 +77,8 @@ def dispatch(envelope, command):
         return link(policy=policy, **payload)
     if command == "missing":
         return missing(policy=policy, **payload)
+    if command == "claim":
+        return claim(policy=policy, **payload)
     if command == "package":
         return package(store, policy, **payload)
     return verify(store, policy, **payload)

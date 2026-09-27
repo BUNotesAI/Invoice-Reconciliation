@@ -1,4 +1,4 @@
-//! Script steps 2-14 over the real local Palpo: the bot in-process, 林一, 周敏 (finance) and a stranger as scripted
+//! Script steps 2-15 over the real local Palpo: the bot in-process, 林一, 周敏 (finance) and a stranger as scripted
 //! Matrix clients.
 //!
 //! Opt-in: `REIMB_LIVE=1 cargo test --test matrix_live -- --nocapture`. Needs `python3 scripts/dev_env.py` first;
@@ -658,4 +658,89 @@ async fn script_over_real_matrix() {
             body_contains("财务已审批通过"),
         )
         .await;
+
+    // Step 15: the two missing-invoice candidates are followed up. 林一 says both are business spending and picks
+    // how to get each invoice; the bot posts the billing details; invoices sent into chat are claimed.
+    linyi
+        .wait_for(
+            &bot_user,
+            since,
+            "follow-up notice",
+            body_contains("可能漏票要跟进"),
+        )
+        .await;
+    let state = desk.state().await;
+    let follow_ups = state["follow_ups"].as_array().unwrap().clone();
+    assert_eq!(follow_ups.len(), 2);
+    for follow in &follow_ups {
+        let id = follow["id"].as_str().unwrap();
+        assert_eq!(
+            desk.post("follow-up", json!({"spend_id": id, "action": "business"}))
+                .await,
+            StatusCode::OK
+        );
+        assert_eq!(
+            desk.post(
+                "follow-up",
+                json!({"spend_id": id, "action": "method", "payload": {"method": "platform"}})
+            )
+            .await,
+            StatusCode::OK
+        );
+    }
+    // Finance sees the follow-ups but cannot act on them.
+    finance.state().await;
+    assert_eq!(
+        finance
+            .post(
+                "follow-up",
+                json!({"spend_id": follow_ups[0]["id"], "action": "abandon"})
+            )
+            .await,
+        StatusCode::FORBIDDEN
+    );
+    linyi
+        .wait_for(
+            &bot_user,
+            since,
+            "billing details",
+            body_contains("税号：91440300XXXXXXXX0A"),
+        )
+        .await;
+    let claim = |name: &str| std::fs::read(repo().join("fixtures/claim").join(name)).unwrap();
+    linyi.file("C03.pdf", claim("C03.pdf")).await;
+    linyi
+        .wait_for(
+            &bot_user,
+            since,
+            "wrong title refused",
+            body_contains("抬头不是公司"),
+        )
+        .await;
+    linyi.file("C04.pdf", claim("C04.pdf")).await;
+    linyi
+        .wait_for(
+            &bot_user,
+            since,
+            "京东 claimed",
+            body_contains("这是漏票 京东商城"),
+        )
+        .await;
+    linyi.file("C01.pdf", claim("C01.pdf")).await;
+    linyi
+        .wait_for(
+            &bot_user,
+            since,
+            "悦途 claimed",
+            body_contains("这是漏票 悦途酒店"),
+        )
+        .await;
+    let state = desk.state().await;
+    let statuses: Vec<&str> = state["follow_ups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["status"].as_str().unwrap())
+        .collect();
+    assert_eq!(statuses, ["claimed", "claimed"]);
 }

@@ -361,6 +361,58 @@ impl Store {
             .optional()
     }
 
+    /// Missing-invoice follow-ups (one per payment, design §8.3); `body` is the full record.
+    pub fn spends(&self, batch: &str) -> rusqlite::Result<Vec<Value>> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT body FROM missing_spends WHERE batch_id = ?1 ORDER BY json_extract(body, '$.payment_date'), id")?;
+        statement
+            .query_map([batch], |row| row.get::<_, String>(0))?
+            .map(|r| r.map(|text| parse(&text)))
+            .collect()
+    }
+
+    /// Follow-ups still waiting on the applicant, across batches; `applicant` narrows to one person.
+    pub fn open_spends(&self, applicant: Option<&str>) -> rusqlite::Result<Vec<Value>> {
+        let mut statement = self.connection.prepare(
+            "SELECT body FROM missing_spends WHERE status IN ('discovered', 'business', 'waiting')
+               AND (?1 IS NULL OR applicant = ?1) ORDER BY json_extract(body, '$.payment_date'), id",
+        )?;
+        statement
+            .query_map([applicant], |row| row.get::<_, String>(0))?
+            .map(|r| r.map(|text| parse(&text)))
+            .collect()
+    }
+
+    pub fn spend(&self, id: &str) -> rusqlite::Result<Option<Value>> {
+        self.connection
+            .query_row(
+                "SELECT body FROM missing_spends WHERE id = ?1",
+                [id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map(|found| found.map(|text| parse(&text)))
+    }
+
+    pub fn reminded(&self, spend: &str) -> rusqlite::Result<Vec<(String, String)>> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT kind, slot FROM reminders WHERE spend_id = ?1 ORDER BY at, kind")?;
+        statement
+            .query_map([spend], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect()
+    }
+
+    pub fn muted_merchants(&self, applicant: &str) -> rusqlite::Result<Vec<String>> {
+        let mut statement = self.connection.prepare(
+            "SELECT merchant FROM muted_merchants WHERE applicant = ?1 ORDER BY merchant",
+        )?;
+        statement
+            .query_map([applicant], |row| row.get(0))?
+            .collect()
+    }
+
     pub fn pairing_audit(&self, batch: &str) -> rusqlite::Result<Vec<(String, String)>> {
         let mut statement = self
             .connection
@@ -621,6 +673,51 @@ impl Work<'_> {
         Ok(())
     }
 
+    /// Writes a follow-up record; `status` is kept in its own column for the open-follow-up query.
+    pub fn put_spend(&self, spend: &Value) -> rusqlite::Result<()> {
+        self.tx.execute(
+            "INSERT INTO missing_spends (id, batch_id, applicant, status, body) VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(id) DO UPDATE SET status = excluded.status, body = excluded.body",
+            params![
+                spend["id"].as_str(),
+                spend["batch_id"].as_str(),
+                spend["applicant"].as_str(),
+                spend["status"].as_str(),
+                spend.to_string()
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Records one reminder; false if this (follow-up, kind, slot) was already sent, so it never goes out twice.
+    pub fn record_reminder(
+        &self,
+        spend: &str,
+        kind: &str,
+        slot: &str,
+        at: i64,
+    ) -> rusqlite::Result<bool> {
+        Ok(self.tx.execute(
+            "INSERT OR IGNORE INTO reminders (spend_id, kind, slot, at) VALUES (?1, ?2, ?3, ?4)",
+            params![spend, kind, slot, at],
+        )? == 1)
+    }
+
+    pub fn mute_merchant(&self, applicant: &str, merchant: &str, at: i64) -> rusqlite::Result<()> {
+        self.tx.execute(
+            "INSERT OR IGNORE INTO muted_merchants (applicant, merchant, at) VALUES (?1, ?2, ?3)",
+            params![applicant, merchant, at],
+        )?;
+        Ok(())
+    }
+
+    pub fn unmute_merchant(&self, applicant: &str, merchant: &str) -> rusqlite::Result<bool> {
+        Ok(self.tx.execute(
+            "DELETE FROM muted_merchants WHERE applicant = ?1 AND merchant = ?2",
+            params![applicant, merchant],
+        )? == 1)
+    }
+
     /// Drops unpaired sessions older than their cookie; their codes go with them.
     pub fn drop_stale_sessions(&self, before: i64) -> rusqlite::Result<()> {
         self.tx.execute(
@@ -718,6 +815,12 @@ CREATE TABLE IF NOT EXISTS history_events (
   body TEXT NOT NULL, UNIQUE (invoice_no, status, batch_id));
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS pairing_failures (sender TEXT NOT NULL, at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS missing_spends (
+  id TEXT PRIMARY KEY, batch_id TEXT NOT NULL, applicant TEXT NOT NULL, status TEXT NOT NULL, body TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS reminders (
+  spend_id TEXT NOT NULL, kind TEXT NOT NULL, slot TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (spend_id, kind, slot));
+CREATE TABLE IF NOT EXISTS muted_merchants (
+  applicant TEXT NOT NULL, merchant TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (applicant, merchant));
 CREATE TABLE IF NOT EXISTS pairing_audit (
   seq INTEGER PRIMARY KEY AUTOINCREMENT, batch_id TEXT NOT NULL, session TEXT NOT NULL, sender TEXT NOT NULL,
   result TEXT NOT NULL, at INTEGER NOT NULL);

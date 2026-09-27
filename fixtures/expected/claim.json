@@ -1,0 +1,16 @@
+{
+  "_note": "Hand-written answers for the P4c claim fixtures; inputs are the two demo missing-invoice candidates.",
+  "spends": [
+    {"id": "missing-jd", "payment_evidence_id": "ev-jd", "merchant": "京东商城", "amount_cents": 45900,
+     "payment_date": "2026-10-22", "status": "waiting", "deadline": "2026-11-30"},
+    {"id": "missing-yuetu", "payment_evidence_id": "ev-yuetu", "merchant": "悦途酒店", "amount_cents": 48000,
+     "payment_date": "2026-10-24", "status": "waiting", "deadline": "2026-11-30"}
+  ],
+  "claims": {
+    "C01": {"result": "match", "reason": "MATCHED", "missing_id": "missing-yuetu", "service_date": "2026-10-24"},
+    "C02": {"result": "rejected", "reason": "AMOUNT_MISMATCH", "missing_id": "missing-yuetu"},
+    "C03": {"result": "rejected", "reason": "WRONG_BUYER", "missing_id": "missing-jd"},
+    "C04": {"result": "match", "reason": "MATCHED", "missing_id": "missing-jd", "service_date": "2026-10-22"},
+    "F01": {"result": "rejected", "reason": "NO_MISSING_MATCH", "missing_id": null}
+  }
+}

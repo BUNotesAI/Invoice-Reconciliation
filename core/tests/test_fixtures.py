@@ -21,7 +21,7 @@ def test_two_generations_are_identical_and_match_the_committed_fixtures(tmp_path
     first, second = generate(tmp_path / "a"), generate(tmp_path / "b")
     assert first == second
     committed = {name: digest for name, digest in tree_hashes(FIXTURES).items()
-                 if name.startswith(("demo/", "edge/"))}
+                 if name.startswith(("demo/", "edge/", "claim/"))}
     assert committed == first
 
 

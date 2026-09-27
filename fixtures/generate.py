@@ -99,6 +99,22 @@ EDGE_INVOICES = [
 ]
 
 
+# P4c invoices that arrive after the batch, sent into chat to settle the two missing-invoice candidates.
+CLAIM_INVOICES = [
+    # The hotel's invoice for the 10/24 stay: matches the missing 悦途酒店 ¥480 payment.
+    dict(code="C01", no="26312000000800000101", date="2026-11-03", amount="480.00", upper="肆佰捌拾圆整",
+         seller="上海悦途酒店管理有限公司", project="*住宿服务*住宿费", remark="入住 2026-10-24 离店 2026-10-25 1晚"),
+    # Same hotel, wrong amount: not the missing payment.
+    dict(code="C02", no="26312000000800000102", date="2026-11-03", amount="500.00", upper="伍佰圆整",
+         seller="上海悦途酒店管理有限公司", project="*住宿服务*住宿费", remark="入住 2026-10-24 离店 2026-10-25 1晚"),
+    # The shop issued it to the person, not the company: must be reissued.
+    dict(code="C03", no="26112000000900000201", date="2026-10-22", amount="459.00", upper="肆佰伍拾玖圆整",
+         seller="北京京东世纪贸易有限公司", project="*计算机外部设备*无线键鼠套装", remark="", buyer=("林一", "")),
+    # The reissue with the company title.
+    dict(code="C04", no="26112000000900000202", date="2026-11-04", amount="459.00", upper="肆佰伍拾玖圆整",
+         seller="北京京东世纪贸易有限公司", project="*计算机外部设备*无线键鼠套装", remark="换开（原票抬头有误）"),
+]
+
 # P2 linking edge cases; each invoice pairs with rows in the P2 edge bill and trip list below.
 LINK_INVOICES = [
     dict(code="R01", no="26442000000800000001", date="2026-10-14", amount="25.00", upper="贰拾伍圆整",
@@ -359,6 +375,8 @@ def generate(root):
         write(root / "edge" / "link" / name, text_pdf(invoice_lines(spec)))
     write(root / "edge" / "link" / "wechat_bill.xlsx", wechat_bill(link_rows(pay)))
     write(root / "edge" / "link" / "didi_trips.pdf", link_trips())
+    for spec in CLAIM_INVOICES:
+        write(root / "claim" / f"{spec['code']}.pdf", text_pdf(invoice_lines(spec)))
     write(root / "edge" / "pages21.pdf", pdf_bytes(lambda page, number: page.drawString(60, 780, f"第 {number + 1} 页"), pages=21))
 
 

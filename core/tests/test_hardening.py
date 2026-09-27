@@ -175,9 +175,10 @@ def test_invalid_envelopes_keep_request_id(runtime, changes, code):
     assert (status, response["ok"], response["error"]["code"]) == (2, False, code)
 
 
-def test_unknown_and_later_phase_commands(runtime):
+def test_unknown_commands(runtime):
+    # `claim` was refused as a later-phase command until P4c; it now exists and checks its fields.
     status, response = runtime.call("claim", None, raw=envelope(runtime, command="claim"), argv=["claim"])
-    assert (status, response["error"]["code"]) == (2, "UNKNOWN_COMMAND")
+    assert (status, response["error"]["code"]) == (2, "INVALID_SCHEMA")
     status, response = runtime.call("drop", None, raw=envelope(runtime, command="drop"), argv=["drop"])
     assert (status, response["error"]["code"]) == (2, "UNKNOWN_COMMAND")
     status, response = runtime.call("ingest", None, raw=envelope(runtime), argv=[])

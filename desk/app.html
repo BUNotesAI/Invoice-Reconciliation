@@ -71,7 +71,8 @@ async function watch() {
   const response = await fetch(api("state"), { credentials: "same-origin", cache: "no-store" });
   if (!response.ok) { await load(); return; }
   const state = await response.json();
-  const seen = (s) => JSON.stringify([s.paired, s.batch && s.batch.revision, s.batch && s.batch.state, s.published]);
+  const seen = (s) => JSON.stringify([s.paired, s.batch && s.batch.revision, s.batch && s.batch.state, s.published,
+                                      (s.follow_ups || []).map((f) => f.status)]);
   if (seen(state) !== seen(current)) {
     current = state;
     render(state);
@@ -126,6 +127,8 @@ function render(state) {
     content.append(card);
   }
   if (state.role === "finance" && state.batch.state === "submitted") content.append(financeCard(state));
+  if (state.batch.state === "approved" && state.follow_ups.length) content.append(followUpCard(state, applicant));
+  if (applicant && state.muted_merchants.length) content.append(mutedCard(state));
   pollTimer = setTimeout(watch, 5000);
 }
 
@@ -217,6 +220,49 @@ function manualForm(item) {
   form.append(button("按手工证据入账", () => post("decide", { item_id: item.item_id, kind: "manual_evidence",
     payload: { service_date: date.value.trim(), note: note.value.trim() || "申请人手工补充" } })));
   return form;
+}
+
+const FOLLOW_STATUS = { discovered: "待确认是不是公务", business: "公务，待选取票办法", waiting: "等票", claimed: "已认领",
+  found: "历史里已有这张票", ignored: "已忽略", no_invoice: "已写无票说明", abandoned: "已放弃" };
+
+function followUpCard(state, applicant) {
+  const card = el("div", null, "card");
+  card.append(el("strong", "漏票跟进"), el("div", "每笔单独处理。发票开好后直接发到聊天里，会自动认领。", "muted"));
+  for (const f of state.follow_ups) {
+    const block = el("div", null, "item");
+    block.append(el("div", `${f.merchant} ${yuan(f.amount_cents)}（${f.payment_date}）· 截止 ${f.deadline}`),
+                 el("div", FOLLOW_STATUS[f.status] || f.status, "muted"));
+    const act = (action, payload) => post("follow-up", { spend_id: f.id, action, payload: payload || {} });
+    if (f.status === "found") block.append(el("div", "票号：" + f.found_invoices.join("、"), "muted"));
+    if (f.status === "claimed") block.append(el("div", "认领的票号：" + f.claimed_invoice, "muted"));
+    if (f.status === "no_invoice") block.append(el("div", "无票说明：" + f.note, "muted"));
+    const open = ["discovered", "business", "waiting"].includes(f.status);
+    if (applicant && open) {
+      if (f.status === "discovered") {
+        block.append(button("是公务", () => act("business")), button("不是（只忽略这一笔）", () => act("not_business")));
+      } else {
+        block.append(el("div", `开票信息：${f.billing.name} / 税号 ${f.billing.tax_id}`, "note"),
+                     button("平台自助开或换开", () => act("method", { method: "platform" })),
+                     button("找商家开", () => act("method", { method: "merchant" })));
+      }
+      const note = el("input");
+      note.placeholder = "开不了票？写无票说明";
+      note.maxLength = 200;
+      block.append(note, button("提交无票说明", () => { if (note.value.trim()) act("no_invoice", { note: note.value.trim() }); else say("请先填写"); }),
+                   button("放弃这一笔", () => act("abandon")), button("以后都不提醒这个商户", () => act("mute")));
+    }
+    card.append(block);
+  }
+  return card;
+}
+
+function mutedCard(state) {
+  const card = el("div", null, "card");
+  card.append(el("strong", "已忽略的商户"), el("div", "这些商户以后不再列为可能漏票，可随时撤销。", "muted"));
+  for (const merchant of state.muted_merchants) {
+    card.append(el("div", merchant), button("撤销忽略", () => post("unmute", { merchant })));
+  }
+  return card;
 }
 
 function button(text, onClick) {

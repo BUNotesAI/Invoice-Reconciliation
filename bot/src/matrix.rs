@@ -286,6 +286,7 @@ pub async fn run_outbox(client: Client, service: Arc<Service>) -> Result<()> {
         let _ = service.remind();
         if tick.is_multiple_of(30) {
             let _ = service.retry_waiting().await;
+            let _ = service.remind_follow_ups();
         }
         send_outbox(&client, &service).await;
         tick += 1;
