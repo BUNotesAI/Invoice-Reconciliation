@@ -1,0 +1,111 @@
+{
+  "_note": "手写标准答案（设计 §10.1）。不得由 generate.py 或生产代码生成。P1 用此处的服务日期、分类、简称与决定作为打包输入。",
+  "batch_id": "batch-202610-linyi",
+  "applicant": "林一",
+  "period": "2026-10",
+  "revision": 7,
+  "detected_types": {
+    "F01.pdf": "invoice_pdf", "F02.pdf": "invoice_pdf", "F03.pdf": "invoice_pdf", "F04.pdf": "invoice_pdf",
+    "F05.pdf": "invoice_pdf", "F06.pdf": "invoice_pdf", "F07.pdf": "invoice_pdf", "F08.pdf": "invoice_pdf",
+    "F09.pdf": "image_invoice_pdf", "F10.pdf": "invoice_pdf", "F11.pdf": "invoice_pdf", "F12.pdf": "invoice_pdf",
+    "F06_screenshot.png": "image", "wechat_bill.xlsx": "wechat_bill", "didi_trips.pdf": "didi_trip_pdf",
+    "history.json": "unsupported"
+  },
+  "invoices": {
+    "F01": {"invoice_no": "26442000000100010131", "issue_date": "2026-10-13", "amount_cents": 3080, "amount_upper": "叁拾圆捌角",
+            "buyer_name": "示例科技有限公司", "buyer_tax_id": "91440300XXXXXXXX0A", "seller_name": "瑞幸咖啡", "order_ref": null, "service_period": null, "issues": []},
+    "F02": {"invoice_no": "26442000000100010152", "issue_date": "2026-10-15", "amount_cents": 2750, "amount_upper": "贰拾柒圆伍角",
+            "buyer_name": "示例科技有限公司", "buyer_tax_id": "91440300XXXXXXXX0A", "seller_name": "瑞幸咖啡", "order_ref": null, "service_period": null, "issues": []},
+    "F03": {"invoice_no": "26112000000200031001", "issue_date": "2026-10-31", "amount_cents": 4620, "amount_upper": "肆拾陆圆贰角",
+            "buyer_name": "示例科技有限公司", "buyer_tax_id": "91440300XXXXXXXX0A", "seller_name": "北京滴滴出行科技有限公司", "order_ref": null, "service_period": null, "issues": []},
+    "F04": {"invoice_no": "26112000000200031002", "issue_date": "2026-10-31", "amount_cents": 3890, "amount_upper": "叁拾捌圆玖角",
+            "buyer_name": "示例科技有限公司", "buyer_tax_id": "91440300XXXXXXXX0A", "seller_name": "北京滴滴出行科技有限公司", "order_ref": null, "service_period": null, "issues": []},
+    "F05": {"invoice_no": "26112000000200031003", "issue_date": "2026-10-31", "amount_cents": 5200, "amount_upper": "伍拾贰圆整",
+            "buyer_name": "示例科技有限公司", "buyer_tax_id": "91440300XXXXXXXX0A", "seller_name": "北京滴滴出行科技有限公司", "order_ref": null, "service_period": null, "issues": []},
+    "F06": {"invoice_no": "26112000000200031004", "issue_date": "2026-10-31", "amount_cents": 2000, "amount_upper": "贰拾圆整",
+            "buyer_name": "示例科技有限公司", "buyer_tax_id": "91440300XXXXXXXX0A", "seller_name": "北京滴滴出行科技有限公司", "order_ref": null, "service_period": null, "issues": []},
+    "F07": {"invoice_no": "26112000000300010101", "issue_date": "2026-10-10", "amount_cents": 128000, "amount_upper": "壹仟贰佰捌拾圆整",
+            "buyer_name": "示例科技有限公司", "buyer_tax_id": "91440300XXXXXXXX0A", "seller_name": "中国国际航空股份有限公司", "order_ref": "CTRIP-ORD-5520", "service_period": null, "issues": []},
+    "F08": {"invoice_no": "26112000000400010091", "issue_date": "2026-10-09", "amount_cents": 156000, "amount_upper": "壹仟伍佰陆拾圆整",
+            "buyer_name": "示例科技有限公司", "buyer_tax_id": "91440300XXXXXXXX0A", "seller_name": "北京燕园会展酒店有限公司", "order_ref": null,
+            "service_period": {"check_in": "2026-10-06", "check_out": "2026-10-09", "nights": 3}, "issues": []},
+    "F09": null,
+    "F10": {"invoice_no": "26112000000300012801", "issue_date": "2026-10-28", "amount_cents": 146000, "amount_upper": "壹仟肆佰陆拾圆整",
+            "buyer_name": "示例科技有限公司", "buyer_tax_id": "91440300XXXXXXXX0A", "seller_name": "中国国际航空股份有限公司", "order_ref": "AIR-ORD-7731", "service_period": null, "issues": []},
+    "F11": {"invoice_no": "26442000000600010211", "issue_date": "2026-10-21", "amount_cents": 8800, "amount_upper": "捌拾捌圆整",
+            "buyer_name": "林一", "buyer_tax_id": "", "seller_name": "某某商贸有限公司", "order_ref": null, "service_period": null, "issues": []},
+    "F12": {"invoice_no": "26112000000200009301", "issue_date": "2026-09-30", "amount_cents": 3160, "amount_upper": "叁拾壹圆陆角",
+            "buyer_name": "示例科技有限公司", "buyer_tax_id": "91440300XXXXXXXX0A", "seller_name": "北京滴滴出行科技有限公司", "order_ref": null, "service_period": null, "issues": []}
+  },
+  "extract_issues_without_vision": {"F09": ["VISION_REQUIRED"]},
+  "vision_candidates": {
+    "F09": {"invoice_no": "26442000000500010191", "issue_date": "2026-10-19", "amount_cents": "386.00", "amount_upper": "叁佰捌拾陆圆整",
+            "buyer_name": "示例科技有限公司", "buyer_tax_id": "91440300XXXXXXXX0A", "seller_name": "深圳潮海居酒楼有限公司",
+            "project": "*餐饮服务*餐费", "remark": ""}
+  },
+  "history": {"entries": 14, "issues": []},
+  "gates": {
+    "F01": {"disposition": "accepted", "review_reasons": [], "replacements": []},
+    "F02": {"disposition": "accepted", "review_reasons": [], "replacements": []},
+    "F03": {"disposition": "accepted", "review_reasons": [], "replacements": []},
+    "F04": {"disposition": "accepted", "review_reasons": [], "replacements": []},
+    "F05": {"disposition": "accepted", "review_reasons": [], "replacements": []},
+    "F06": {"disposition": "accepted", "review_reasons": [], "replacements": []},
+    "F07": {"disposition": "accepted", "review_reasons": [], "replacements": []},
+    "F08": {"disposition": "accepted", "review_reasons": [], "replacements": []},
+    "F09": {"disposition": "needs_decision", "review_reasons": ["FACT_UNCONFIRMED"], "replacements": []},
+    "F10": {"disposition": "needs_decision", "review_reasons": ["REPLACEMENT_REQUIRES_DECISION"], "replacements": ["26112000000300002208"]},
+    "F11": {"disposition": "rejected", "review_reasons": ["WRONG_BUYER"], "replacements": []},
+    "F12": {"disposition": "rejected", "review_reasons": ["DUPLICATE_INVOICE"], "replacements": []}
+  },
+  "gates_after_confirmation": {
+    "F09": {"disposition": "accepted", "review_reasons": [], "replacements": []}
+  },
+  "package_items": {
+    "F01": {"service_date": "2026-10-13", "category": "餐饮", "short_name": "瑞幸", "expense_detail": "工作餐-咖啡"},
+    "F02": {"service_date": "2026-10-15", "category": "餐饮", "short_name": "瑞幸", "expense_detail": "工作餐-咖啡"},
+    "F03": {"service_date": "2026-10-10", "category": "打车", "short_name": "滴滴", "expense_detail": "市内交通 科技园地铁站—深圳北站"},
+    "F04": {"service_date": "2026-10-12", "category": "打车", "short_name": "滴滴", "expense_detail": "市内交通 深圳北站—科技园地铁站"},
+    "F05": {"service_date": "2026-10-20", "category": "打车", "short_name": "滴滴", "expense_detail": "市内交通 会展中心—科技园地铁站"},
+    "F06": {"service_date": "2026-10-17", "category": "打车", "short_name": "滴滴", "expense_detail": "市内交通 深圳湾口岸—科技园地铁站"},
+    "F07": {"service_date": "2026-10-09", "category": "机票", "short_name": "国航", "expense_detail": "出差北京 机票 CA1831"},
+    "F08": {"service_date": "2026-10-06", "category": "住宿", "short_name": "燕园会展酒店", "expense_detail": "出差北京 住宿 3晚"},
+    "F09": {"service_date": "2026-10-19", "category": "餐饮", "short_name": "潮海居", "expense_detail": "客户接待餐"},
+    "F10": {"service_date": "2026-09-22", "category": "机票", "short_name": "国航", "expense_detail": "出差 机票 CA1502", "replaces_invoice_no": "26112000000300002208"}
+  },
+  "decisions": [
+    {"id": "decision-f06", "item": "F06", "kind": "choose_evidence", "payload": {"evidence_id": "evidence-f06-screenshot"}},
+    {"id": "decision-f08", "item": "F08", "kind": "explain_over_limit", "payload": {"explanation": "会展期间协议价上浮，每晚超标 20 元"}},
+    {"id": "decision-f09", "item": "F09", "kind": "confirm_visual", "payload": {"fact_ids": "ALL_CONFIRMED_FACTS"}},
+    {"id": "decision-f10", "item": "F10", "kind": "replace_unpaid_invoice", "payload": {"invoice_no": "26112000000300002208"}}
+  ],
+  "ledger": {
+    "name": "示例科技-费用报销发票交接清单-林一-CNY4901.4.xlsx",
+    "rows": [
+      {"item": "F10", "service_date": "2026-09-22", "amount_cents": 146000, "btype": "差旅费", "summary": "差旅-交通费",
+       "expense_detail": "出差 机票 CA1502；重开票，原票 26112000000300002208 已作废", "file": "26112000000300012801_国航_1460_机票.pdf"},
+      {"item": "F08", "service_date": "2026-10-06", "amount_cents": 156000, "btype": "差旅费", "summary": "差旅-住宿费",
+       "expense_detail": "出差北京 住宿 3晚", "file": "26112000000400010091_燕园会展酒店_1560_住宿.pdf"},
+      {"item": "F07", "service_date": "2026-10-09", "amount_cents": 128000, "btype": "差旅费", "summary": "差旅-交通费",
+       "expense_detail": "出差北京 机票 CA1831", "file": "26112000000300010101_国航_1280_机票.pdf"},
+      {"item": "F03", "service_date": "2026-10-10", "amount_cents": 4620, "btype": "差旅费", "summary": "差旅-交通费",
+       "expense_detail": "市内交通 科技园地铁站—深圳北站", "file": "26112000000200031001_滴滴_46.2_打车.pdf"},
+      {"item": "F04", "service_date": "2026-10-12", "amount_cents": 3890, "btype": "差旅费", "summary": "差旅-交通费",
+       "expense_detail": "市内交通 深圳北站—科技园地铁站", "file": "26112000000200031002_滴滴_38.9_打车.pdf"},
+      {"item": "F01", "service_date": "2026-10-13", "amount_cents": 3080, "btype": "餐饮", "summary": "餐饮费",
+       "expense_detail": "工作餐-咖啡", "file": "26442000000100010131_瑞幸_30.8_餐饮.pdf"},
+      {"item": "F02", "service_date": "2026-10-15", "amount_cents": 2750, "btype": "餐饮", "summary": "餐饮费",
+       "expense_detail": "工作餐-咖啡", "file": "26442000000100010152_瑞幸_27.5_餐饮.pdf"},
+      {"item": "F06", "service_date": "2026-10-17", "amount_cents": 2000, "btype": "差旅费", "summary": "差旅-交通费",
+       "expense_detail": "市内交通 深圳湾口岸—科技园地铁站", "file": "26112000000200031004_滴滴_20_打车.pdf"},
+      {"item": "F09", "service_date": "2026-10-19", "amount_cents": 38600, "btype": "餐饮", "summary": "餐饮费",
+       "expense_detail": "客户接待餐", "file": "26442000000500010191_潮海居_386_餐饮.pdf"},
+      {"item": "F05", "service_date": "2026-10-20", "amount_cents": 5200, "btype": "差旅费", "summary": "差旅-交通费",
+       "expense_detail": "市内交通 会展中心—科技园地铁站", "file": "26112000000200031003_滴滴_52_打车.pdf"}
+    ],
+    "category_totals": {"差旅-交通费": 289710, "差旅-住宿费": 156000, "餐饮费": 44430},
+    "total_cents": 490140,
+    "entered_count": 10
+  },
+  "verify": {"passed": true, "checks": ["row_completeness", "date_order", "unique_invoices", "table_disk", "filename_fields", "category_totals", "source_facts"]}
+}

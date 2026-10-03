@@ -1,0 +1,25 @@
+[package]
+name = "reimb-bot"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+anyhow = "1"
+axum = "0.8"
+hex = "0.4"
+libc = "0.2"
+matrix-sdk = { git = "https://github.com/matrix-org/matrix-rust-sdk", rev = "6892cb217ae4a886571e928c8efcccfbec5490a6", default-features = false, features = ["rustls-aws-lc-rs"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+regex = "1"
+sha2 = "0.10"
+uuid = { version = "1", features = ["v4"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "fs", "process", "io-util", "time"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[patch."https://github.com/ruma/ruma"]
+ruma = { git = "https://github.com/project-robius/ruma.git", rev = "7a912c8579871e72468ee5a4deecc16615e73099" }

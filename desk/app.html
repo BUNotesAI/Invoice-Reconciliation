@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>报销对账台</title>
+<style>
+  :root { --ink: #1f2a26; --muted: #5b6b64; --line: #d3ded9; --accent: #0f766e; --warn: #b45309; --bg: #f6f8f7; }
+  body { margin: 0; font: 15px/1.6 -apple-system, "PingFang SC", "Noto Sans SC", sans-serif; color: var(--ink); background: var(--bg); }
+  main { max-width: 860px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 20px; margin: 8px 0 4px; }
+  .muted { color: var(--muted); }
+  .card { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin: 12px 0; }
+  .code { font: 600 36px/1.2 ui-monospace, Menlo, monospace; letter-spacing: 6px; color: var(--accent); }
+  pre { white-space: pre-wrap; margin: 0; font: inherit; }
+  label { display: block; margin: 6px 0 2px; color: var(--muted); font-size: 13px; }
+  input, textarea, select { width: 100%; box-sizing: border-box; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; font: inherit; }
+  button { margin: 8px 8px 0 0; padding: 7px 14px; border-radius: 6px; border: 1px solid var(--accent); background: var(--accent); color: #fff; font: inherit; cursor: pointer; }
+  button.secondary { background: #fff; color: var(--accent); }
+  .reason { color: var(--warn); }
+  .note { border-left: 3px solid var(--line); padding-left: 8px; margin-top: 6px; }
+  img.original { max-width: 100%; border: 1px solid var(--line); border-radius: 6px; margin-top: 8px; }
+  #message { min-height: 1.4em; }
+</style>
+</head>
+<body>
+<main>
+  <h1>报销对账台</h1>
+  <div id="status" class="muted">正在连接…</div>
+  <div id="message" class="reason"></div>
+  <div id="content"></div>
+</main>
+<script>
+"use strict";
+const batch = location.pathname.split("/").filter(Boolean).pop();
+const api = (path) => `/desk/api/b/${encodeURIComponent(batch)}/${path}`;
+const REASONS = {
+  EVIDENCE_MISSING: "没有找到对应的支付记录", OVER_LIMIT: "金额超过政策标准，需要说明", FACT_UNCONFIRMED: "图片票的读数需要你对照原图确认",
+  VISION_REQUIRED: "图片没能读出，请发原始 PDF 或手动核对", REPLACEMENT_REQUIRES_DECISION: "重开票：原票已作废且未付款",
+  HISTORY_ALREADY_PAID: "原票已付款，只能更换凭证", HISTORY_UNKNOWN: "原票状态不明", PARTIAL_REFUND: "对应支付有部分退款",
+  PAYMENT_STATUS_UNKNOWN: "支付状态不明", LINK_CONFLICT: "同一笔支付被两张票争用", MULTIPLE_CANDIDATES: "有多笔可能对应的支付",
+  DATE_CONFLICT: "证据给出的日期不一致", SERVICE_DATE_MISSING: "定不出消费日期", OUT_OF_WINDOW: "日期不在本期可报范围",
+  STAY_PERIOD_MISSING: "住宿票缺入住离店日期", CATEGORY_UNKNOWN: "报销类别需要确认", CATEGORY_CONFLICT: "报销类别需要确认",
+};
+const FIELD_NAMES = { invoice_no: "发票号码", issue_date: "开票日期", amount_cents: "金额（元）", amount_upper: "大写金额",
+  buyer_name: "购买方", buyer_tax_id: "购买方税号", seller_name: "销售方", project: "项目", remark: "备注", order_ref: "订单号",
+  merchant: "商户", amount: "金额（元）", service_date: "日期", };
+let current = null;
+let pollTimer = null;
+
+function el(tag, text, cls) {
+  const node = document.createElement(tag);
+  if (text !== undefined && text !== null) node.textContent = String(text);
+  if (cls) node.className = cls;
+  return node;
+}
+function yuan(cents) { return "¥" + (cents / 100).toFixed(2); }
+function say(text) { document.getElementById("message").textContent = text || ""; }
+
+async function load() {
+  const response = await fetch(api("state"), { credentials: "same-origin", cache: "no-store" });
+  if (response.status === 401) { say("会话已过期，请从聊天里重新打开卡片。"); return; }
+  if (response.status === 403) { say("这个页面属于另一个批次或你没有权限。"); return; }
+  const state = await response.json();
+  current = state;
+  render(state);
+}
+
+// A paired page keeps polling, but redraws only when the batch moved on, so a half-filled form is not wiped.
+async function watch() {
+  const response = await fetch(api("state"), { credentials: "same-origin", cache: "no-store" });
+  if (!response.ok) { await load(); return; }
+  const state = await response.json();
+  const seen = (s) => JSON.stringify([s.paired, s.batch && s.batch.revision, s.batch && s.batch.state, s.published,
+                                      (s.follow_ups || []).map((f) => f.status)]);
+  if (seen(state) !== seen(current)) {
+    current = state;
+    render(state);
+    say("批次有了新进展，页面已更新。");
+  } else {
+    pollTimer = setTimeout(watch, 5000);
+  }
+}
+
+async function post(path, body) {
+  say("");
+  const response = await fetch(api(path), {
+    method: "POST", credentials: "same-origin", cache: "no-store",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": current.csrf },
+    body: JSON.stringify(Object.assign({ expected_revision: current.batch.revision }, body)),
+  });
+  if (response.status === 409) { say("页面已刷新到最新版本，请再看一遍再操作。"); }
+  else if (!response.ok) { const detail = await response.json().catch(() => ({})); say("没有成功：" + (detail.detail || detail.error || response.status)); }
+  await load();
+}
+
+function render(state) {
+  const status = document.getElementById("status");
+  const content = document.getElementById("content");
+  content.replaceChildren();
+  clearTimeout(pollTimer);
+  if (!state.paired) {
+    status.textContent = "还没有配对";
+    const card = el("div", null, "card");
+    card.append(el("div", "把下面的 6 位码发给「报销助手」，只发送你本人刚打开的页面上的码："), el("div", state.code, "code"),
+                el("div", "10 分钟内有效。配对成功后这个页面会自动刷新。", "muted"));
+    content.append(card);
+    pollTimer = setTimeout(load, 3000);
+    return;
+  }
+  status.textContent = `${state.user} · 批次状态：${state.batch.label} · 版本 ${state.batch.revision}`;
+  if (state.report) {
+    const card = el("div", null, "card");
+    card.append(el("pre", state.report.text));
+    content.append(card);
+  }
+  const applicant = state.role === "applicant";
+  const pending = (state.report ? state.report.items : []).filter((item) => item.disposition === "needs_decision");
+  for (const item of pending) content.append(itemCard(item, state, applicant));
+  if (applicant && state.returned && state.batch.state === "needs_decision") content.append(returnedCard(state));
+  if (applicant && state.batch.state === "awaiting_confirm") content.append(confirmCard(state));
+  if (state.published) content.append(publishedCard(state));
+  if (applicant && state.batch.state === "ready_to_share") {
+    const card = el("div", null, "card");
+    card.append(el("strong", "提交给财务"), el("div", "提交后财务会收到通知，可以审批或退回个别项目。", "muted"),
+                button("提交给财务", () => post("submit", {})));
+    content.append(card);
+  }
+  if (state.role === "finance" && state.batch.state === "submitted") content.append(financeCard(state));
+  if (state.batch.state === "approved" && state.follow_ups.length) content.append(followUpCard(state, applicant));
+  if (applicant && state.muted_merchants.length) content.append(mutedCard(state));
+  pollTimer = setTimeout(watch, 5000);
+}
+
+function itemCard(item, state, applicant) {
+  const card = el("div", null, "card");
+  const name = item.short_name || item.seller || item.file;
+  card.append(el("strong", `${name} ${item.amount_cents != null ? yuan(item.amount_cents) : "（金额待读取）"}`));
+  for (const code of item.reasons) card.append(el("div", REASONS[code] || code, "reason"));
+  if (item.explanation) card.append(el("div", "Agent 说明：" + item.explanation, "note muted"));
+  if (!applicant || state.batch.state !== "needs_decision") return card;
+  const reasons = new Set(item.reasons);
+  const visual = state.visual_checks[item.item_id];
+  if (reasons.has("FACT_UNCONFIRMED") && visual) card.append(fieldForm(visual.source_id, visual.fields, "按原图确认读数",
+      (fields) => post("confirm-visual", { item_id: item.item_id, corrections: fields })));
+  if (reasons.has("OVER_LIMIT")) card.append(textForm("超标原因", "提交说明",
+      (text) => post("decide", { item_id: item.item_id, kind: "explain_over_limit", payload: { explanation: text } })));
+  if (reasons.has("REPLACEMENT_REQUIRES_DECISION")) {
+    const original = (state.report.replacements[item.item_id] || [])[0];
+    if (original) card.append(button(`按替换入账（原票 ${original}）`,
+      () => post("decide", { item_id: item.item_id, kind: "replace_unpaid_invoice", payload: { invoice_no: original } })));
+  }
+  if (reasons.has("HISTORY_ALREADY_PAID")) {
+    // The original was already paid: this invoice adds no reimbursement. Swapping the voucher is done with finance.
+    card.append(el("div", "原票已付款，这张不能再报销；只是更换凭证的，请线下交给财务。", "muted"),
+      button("不报销（移出本批）", () => post("decide", { item_id: item.item_id, kind: "reject",
+        payload: { reason: "原票已付款，只更换凭证" } })));
+  }
+  if (reasons.has("EVIDENCE_MISSING")) {
+    for (const shot of state.screenshots) card.append(fieldForm(shot.source_id, shot.fields, `核对截图「${shot.file}」的读数`,
+      (fields) => post("confirm-screenshot", { source_id: shot.source_id, corrections: fields })));
+  }
+  if (["EVIDENCE_MISSING", "DATE_CONFLICT", "SERVICE_DATE_MISSING"].some((code) => reasons.has(code))) card.append(manualForm(item));
+  if (reasons.has("MULTIPLE_CANDIDATES") || reasons.has("LINK_CONFLICT")) {
+    const link = (state.links || []).find((row) => row.item_id === item.item_id);
+    for (const candidate of (link ? link.payment_candidates : [])) card.append(button(`选这笔支付：${candidate}`,
+      () => post("decide", { item_id: item.item_id, kind: "choose_evidence", payload: { evidence_id: candidate } })));
+  }
+  card.append(textForm("不报这张票的原因", "不报这张票", (text) => post("decide", { item_id: item.item_id, kind: "reject", payload: { reason: text } }), true));
+  return card;
+}
+
+function fieldForm(sourceId, fields, title, submit) {
+  const form = el("div");
+  form.append(el("div", title, "muted"));
+  const img = el("img", null, "original");
+  img.alt = "原件";
+  img.src = api("source/" + encodeURIComponent(sourceId));
+  form.append(img);
+  const inputs = {};
+  for (const [name, value] of Object.entries(fields)) {
+    if (name === "amount_cents" && typeof value === "number") { inputs[name] = input(form, FIELD_NAMES[name], (value / 100).toFixed(2)); continue; }
+    if (name === "amount_cents") { inputs.amount = input(form, FIELD_NAMES.amount, (value / 100).toFixed(2)); continue; }
+    inputs[name] = input(form, FIELD_NAMES[name] || name, value);
+  }
+  form.append(button("确认（与原件一致）", () => {
+    const changed = {};
+    for (const [name, node] of Object.entries(inputs)) {
+      const original = name === "amount_cents" || name === "amount" ? ((fields.amount_cents ?? fields.amount) / 100).toFixed(2) : String(fields[name] ?? "");
+      if (node.value !== original) changed[name] = node.value;
+    }
+    submit(changed);
+  }));
+  return form;
+}
+
+function input(parent, labelText, value) {
+  parent.append(el("label", labelText));
+  const node = el("input");
+  node.value = value == null ? "" : String(value);
+  parent.append(node);
+  return node;
+}
+
+function textForm(labelText, action, submit, secondary) {
+  const form = el("div");
+  form.append(el("label", labelText));
+  const area = el("textarea");
+  area.maxLength = 1000;
+  form.append(area);
+  const b = button(action, () => { if (area.value.trim()) submit(area.value.trim()); else say("请先填写"); });
+  if (secondary) b.className = "secondary";
+  form.append(b);
+  return form;
+}
+
+function manualForm(item) {
+  const form = el("div");
+  const date = input(form, "实际消费日期（YYYY-MM-DD）", item.service_date || "");
+  const note = input(form, "依据说明", "");
+  form.append(button("按手工证据入账", () => post("decide", { item_id: item.item_id, kind: "manual_evidence",
+    payload: { service_date: date.value.trim(), note: note.value.trim() || "申请人手工补充" } })));
+  return form;
+}
+
+const FOLLOW_STATUS = { discovered: "待确认是不是公务", business: "公务，待选取票办法", waiting: "等票", claimed: "已认领",
+  found: "历史里已有这张票", ignored: "已忽略", no_invoice: "已写无票说明", abandoned: "已放弃" };
+
+function followUpCard(state, applicant) {
+  const card = el("div", null, "card");
+  card.append(el("strong", "漏票跟进"), el("div", "每笔单独处理。发票开好后直接发到聊天里，会自动认领。", "muted"));
+  for (const f of state.follow_ups) {
+    const block = el("div", null, "item");
+    block.append(el("div", `${f.merchant} ${yuan(f.amount_cents)}（${f.payment_date}）· 截止 ${f.deadline}`),
+                 el("div", FOLLOW_STATUS[f.status] || f.status, "muted"));
+    const act = (action, payload) => post("follow-up", { spend_id: f.id, action, payload: payload || {} });
+    if (f.status === "found") block.append(el("div", "票号：" + f.found_invoices.join("、"), "muted"));
+    if (f.status === "claimed") block.append(el("div", "认领的票号：" + f.claimed_invoice, "muted"));
+    if (f.status === "no_invoice") block.append(el("div", "无票说明：" + f.note, "muted"));
+    const open = ["discovered", "business", "waiting"].includes(f.status);
+    if (applicant && open) {
+      if (f.status === "discovered") {
+        block.append(button("是公务", () => act("business")), button("不是（只忽略这一笔）", () => act("not_business")));
+      } else {
+        block.append(el("div", `开票信息：${f.billing.name} / 税号 ${f.billing.tax_id}`, "note"),
+                     button("平台自助开或换开", () => act("method", { method: "platform" })),
+                     button("找商家开", () => act("method", { method: "merchant" })));
+      }
+      const note = el("input");
+      note.placeholder = "开不了票？写无票说明";
+      note.maxLength = 200;
+      block.append(note, button("提交无票说明", () => { if (note.value.trim()) act("no_invoice", { note: note.value.trim() }); else say("请先填写"); }),
+                   button("放弃这一笔", () => act("abandon")), button("以后都不提醒这个商户", () => act("mute")));
+    }
+    card.append(block);
+  }
+  return card;
+}
+
+function mutedCard(state) {
+  const card = el("div", null, "card");
+  card.append(el("strong", "已忽略的商户"), el("div", "这些商户以后不再列为可能漏票，可随时撤销。", "muted"));
+  for (const merchant of state.muted_merchants) {
+    card.append(el("div", merchant), button("撤销忽略", () => post("unmute", { merchant })));
+  }
+  return card;
+}
+
+function button(text, onClick) {
+  const b = el("button", text);
+  b.type = "button";
+  b.addEventListener("click", onClick);
+  return b;
+}
+
+function confirmCard(state) {
+  const card = el("div", null, "card");
+  card.append(el("strong", "全部判断完成"), el("div", "确认后按当前版本生成报销包并终审；生成后不可修改，只能新开版本。", "muted"));
+  // Short names outside the policy table are suggestions: shown here, editable, and confirmed with the batch.
+  const edits = {};
+  const fresh = (state.short_names || []).filter((row) => !row.from_policy);
+  if (fresh.length) {
+    card.append(el("div", "以下简称不在公司简称表里，会写进文件名；确认生成即确认这些简称，可先修改：", "muted"));
+    const seen = new Map();
+    for (const row of fresh) {
+      if (seen.has(row.seller)) { seen.get(row.seller).push(row.item_id); continue; }
+      seen.set(row.seller, [row.item_id]);
+      const input = el("input");
+      input.value = row.short_name || "";
+      input.maxLength = 20;
+      input.addEventListener("input", () => { for (const id of seen.get(row.seller)) edits[id] = input.value.trim(); });
+      card.append(el("div", row.seller), input);
+    }
+  }
+  card.append(button("确认生成", () => post("confirm", { short_names: edits })));
+  const back = button("暂不生成", () => post("decline", {}));
+  back.className = "secondary";
+  card.append(back);
+  return card;
+}
+
+function returnedCard(state) {
+  const card = el("div", null, "card");
+  card.append(el("strong", "财务退回的项目"), el("div", "只有这些项目可以修改，其余保持不变。", "muted"));
+  const names = Object.fromEntries((state.report.items || []).map((item) => [item.item_id, item.short_name || item.file]));
+  for (const [itemId, reason] of Object.entries(state.returned)) {
+    const block = el("div", null, "note");
+    block.append(el("div", `${names[itemId] || itemId}：${reason}`, "reason"));
+    const done = state.supplements && state.supplements[itemId];
+    if (done) { block.append(el("div", "已补充：" + done, "muted")); card.append(block); continue; }
+    const people = input(block, "人数", "");
+    const purpose = input(block, "事由", "");
+    const preview = el("div", "", "muted");
+    const update = () => { preview.textContent = purpose.value.trim() && people.value ? `将写入费用明细：${purpose.value.trim()}，${people.value} 人` : ""; };
+    people.addEventListener("input", update); purpose.addEventListener("input", update);
+    block.append(preview, button("确认补充说明", () => post("supplement", { item_id: itemId, people: Number(people.value), purpose: purpose.value.trim() })));
+    card.append(block);
+  }
+  return card;
+}
+
+function financeCard(state) {
+  const card = el("div", null, "card");
+  card.append(el("strong", "财务审核"), el("div", "审批当前提交的版本，或勾选需要退回的项目并写明原因。", "muted"));
+  const reasons = {};
+  for (const item of (state.report.items || []).filter((row) => row.disposition === "accepted")) {
+    const row = el("div", null, "note");
+    const label = el("label", `${item.short_name || item.file} ${item.amount_cents != null ? yuan(item.amount_cents) : ""}`);
+    const reason = el("input");
+    reason.placeholder = "退回原因（留空表示不退回）";
+    reason.maxLength = 200;
+    reasons[item.item_id] = reason;
+    row.append(label, reason);
+    card.append(row);
+  }
+  card.append(button("审批通过", () => post("approve", {})));
+  const back = button("退回所填项目", () => {
+    const items = Object.fromEntries(Object.entries(reasons).filter(([, node]) => node.value.trim()).map(([id, node]) => [id, node.value.trim()]));
+    if (!Object.keys(items).length) { say("请至少为一项填写退回原因"); return; }
+    post("return", { items });
+  });
+  back.className = "secondary";
+  card.append(back);
+  return card;
+}
+
+function publishedCard(state) {
+  const card = el("div", null, "card");
+  card.append(el("strong", "报销包已生成"));
+  for (const name of state.published) {
+    const a = el("a", name);
+    a.href = api("files/" + encodeURIComponent(name));
+    a.style.display = "block";
+    card.append(a);
+  }
+  return card;
+}
+
+load();
+</script>
+</body>
+</html>

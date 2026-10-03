@@ -1,0 +1,6 @@
+{
+  "key": "c2240614460e0d22a33e42da2b6fa1ab0a3493adba5d2843bc7863a9d2f06325",
+  "task": "explain",
+  "response": "{\"items\":[{\"item_id\":\"item-1df310e43b06\",\"fact_refs\":[\"item-1df310e43b06.amount\",\"item-1df310e43b06.seller\",\"item-1df310e43b06.issue_date\"],\"explanation\":\"该笔滴滴出行费用20.00元（开票日期2026-10-31）缺少对应票据凭证，需补充上传后复核。\"},{\"item_id\":\"item-21adfccdf473\",\"fact_refs\":[\"item-21adfccdf473.amount\",\"item-21adfccdf473.hotel_limit_total\",\"item-21adfccdf473.nights\",\"item-21adfccdf473.hotel_limit_per_night\"],\"explanation\":\"住宿总额1560.00元超出住宿总额上限1500.00元；共3晚，每晚上限500.00元，超出部分需说明或调整。\"},{\"item_id\":\"item-a9ca9db96c55\",\"fact_refs\":[\"item-a9ca9db96c55.amount\",\"item-a9ca9db96c55.daily_limit\",\"item-a9ca9db96c55.seller\",\"item-a9ca9db96c55.issue_date\"],\"explanation\":\"餐饮费用386.00元高于日限额150.00元，且商户深圳潮海居酒楼有限公司（开票日期2026-10-19）的相关事实尚未确认，需补充佐证材料。\"},{\"item_id\":\"item-f58e7152fc27\",\"fact_refs\":[\"item-f58e7152fc27.amount\",\"item-f58e7152fc27.service_date\",\"item-f58e7152fc27.issue_date\"],\"explanation\":\"该机票金额1460.00元，服务日期2026-09-22早于开票日期2026-10-28，疑似改签替换票，是否按替换票据处理需审核人决策。\"}]}",
+  "note": "recorded from a real octos turn"
+}

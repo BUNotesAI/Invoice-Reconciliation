@@ -3,6 +3,7 @@
 CLAUDE.md
 CLAUDE.local.md
 .playwright-mcp/
+.octos/
 
 # OS and editor
 .DS_Store
