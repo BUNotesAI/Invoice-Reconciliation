@@ -24,13 +24,26 @@ GOSIM Agentic App 黑客松 2026 参赛作品。
 
 ## 演示截图
 
-> 截图位：以下画面在录制演示时补入 `docs/images/`（全部为虚构数据）。
+以下截图来自 Rinx（`scripts/versions.json` 钉定的提交）与本机 Palpo，Agent 为真实 octos（Kimi K3），全部为虚构数据。
+
+**报告卡**：自动匹配 6 张 / 待你判断 4 张 / 拒收 2 张、可能漏票 2 笔，每条待判断项附 Agent 说明，下面是打开对账台的 mini_app 卡片。
+
+![Rinx 里的对账报告卡](docs/images/02-report.png)
+
+**对账台配对**：卡片在 Rinx 的原生 mini_app 容器里打开，页面只显示 6 位码；申请人把码发给报销助手完成配对。
+
+![对账台配对码](docs/images/03-pairing.png)
+
+![在聊天里发码，配对成功](docs/images/03-paired-chat.png)
+
+**收件**：15 个文件逐一回执。
+
+![15 个文件逐一回执](docs/images/01-files.png)
+
+其余画面在录制演示时补入 `docs/images/`：
 
 | 画面 | 文件 |
 |---|---|
-| Rinx 私聊：15 个文件逐一回执 | `docs/images/01-files.png`（待补） |
-| 报告卡：6/4/2、可能漏票 2 笔、对账台卡片 | `docs/images/02-report.png`（待补） |
-| 对账台：配对码 → 配对成功 | `docs/images/03-pairing.png`（待补） |
 | 对账台：图片票读数核对（候选 → 本人确认） | `docs/images/04-visual-check.png`（待补） |
 | 回帖：终审全部通过（7/7）、报销包下载 | `docs/images/05-published.png`（待补） |
 | 财务视角：审核、退回一项 | `docs/images/06-finance.png`（待补） |
